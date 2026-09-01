@@ -1,0 +1,56 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum IdType {
+  AADHAAR
+  PASSPORT
+  DRIVING_LICENSE
+  VOTER_ID
+  OTHER
+}
+
+enum RegistrationStatus {
+  PENDING
+  APPROVED
+  CHECKED_IN
+  REJECTED
+}
+
+model StaffUser {
+  id           String         @id @default(cuid())
+  email        String         @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime       @default(now())
+  reviewed     Registration[] @relation("ReviewedBy")
+}
+
+model Registration {
+  id                   String             @id @default(cuid())
+  fullName             String
+  dob                  String?
+  gender               String?
+  nationality          String?
+  idType               IdType             @default(AADHAAR)
+  idNumber             String?
+  address              String?
+  phone                String
+  email                String?
+  checkInDate          DateTime?
+  checkOutDate         DateTime?
+  purposeOfVisit       String?
+  vehicleNumber        String?
+  numberOfGuests       Int                @default(1)
+  idDocumentImagePath  String?
+  status               RegistrationStatus @default(PENDING)
+  consentGiven         Boolean            @default(false)
+  createdAt            DateTime           @default(now())
+  reviewedByStaffId    String?
+  reviewedByStaff      StaffUser?         @relation("ReviewedBy", fields: [reviewedByStaffId], references: [id])
+}
