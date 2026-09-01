@@ -7,7 +7,7 @@ test.describe('access control', () => {
     await page.goto('/dashboard');
 
     await expect(page).toHaveURL(/\/login$/);
-    await expect(page.getByRole('heading', { name: 'Staff Login' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Staff sign in' })).toBeVisible();
   });
 
   test('a registration detail page is closed too', async ({ page }) => {
@@ -22,7 +22,7 @@ test.describe('access control', () => {
     await page.getByLabel('Password').fill('definitely-not-the-password');
     await page.getByRole('button', { name: 'Sign in' }).click();
 
-    await expect(page.getByText('Invalid credentials')).toBeVisible();
+    await expect(page.getByText('Invalid email or password')).toBeVisible();
     await expect(page).toHaveURL(/\/login$/);
   });
 
@@ -38,7 +38,7 @@ test.describe('access control', () => {
   test('logging out clears the session', async ({ page }) => {
     await staffLogin(page);
 
-    await page.getByRole('button', { name: 'Log out' }).click();
+    await page.getByRole('button', { name: 'Sign out' }).click();
 
     await expect(page).toHaveURL(/\/login$/);
     expect(await page.evaluate(() => localStorage.getItem('staffToken'))).toBeNull();

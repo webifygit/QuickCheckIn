@@ -8,8 +8,27 @@ const jsQR = require('jsqr');
 //   - Legacy QR (pre-2018): a plain XML string (<PrintLetterBarcodeData .../>)
 // Decoding happens entirely on our server, so the ID image is never sent anywhere.
 
-async function decodeQrFromImage(imagePath) {
-  const image = await Jimp.read(imagePath);
+// A modern phone camera produces 12MP+ images, and the decoder allocates four
+// bytes per pixel per variant. Without a ceiling, one upload can exhaust memory
+// well before the 8MB file-size limit is reached (compression hides the cost).
+const MAX_SOURCE_PIXELS = 4_000_000; // ~2300x1730
+const MAX_VARIANT_PIXELS = 8_000_000;
+
+// The secure QR is a big integer, but a crafted QR could hold an arbitrarily
+// long digit string, and BigInt parsing is superlinear. Real payloads sit well
+// under 2000 digits.
+const MAX_SECURE_QR_DIGITS = 8000;
+const MAX_DECOMPRESSED_BYTES = 4 * 1024 * 1024;
+
+async function decodeQrFromImage(input) {
+  let image = await Jimp.read(input);
+
+  // Downscale oversized photos once, up front, so every later variant works
+  // from a bounded buffer.
+  const sourcePixels = image.bitmap.width * image.bitmap.height;
+  if (sourcePixels > MAX_SOURCE_PIXELS) {
+    image = image.scale(Math.sqrt(MAX_SOURCE_PIXELS / sourcePixels));
+  }
 
   // Aadhaar's secure QR is dense, so a single pass on a phone photo often fails.
   // Try progressively cleaned-up variants until one decodes.
@@ -30,6 +49,8 @@ async function decodeQrFromImage(imagePath) {
     }
 
     const { data, width, height } = candidate.bitmap;
+    if (width * height > MAX_VARIANT_PIXELS) continue;
+
     const result = jsQR(new Uint8ClampedArray(data), width, height);
     if (result && result.data) {
       return result.data;
@@ -53,8 +74,13 @@ const SECURE_QR_FIELDS = [
 ];
 
 function parseSecureQr(qrString) {
+  if (qrString.length > MAX_SECURE_QR_DIGITS) {
+    throw new Error('Secure QR payload is implausibly large');
+  }
+
   const compressed = bigIntStringToBuffer(qrString);
-  const decompressed = zlib.gunzipSync(compressed);
+  // A gzip bomb decompresses to far more than any real card needs.
+  const decompressed = zlib.gunzipSync(compressed, { maxOutputLength: MAX_DECOMPRESSED_BYTES });
 
   // Fields are delimited by byte 0xFF. Everything past the text fields is
   // the photo/signature blob, which we ignore.

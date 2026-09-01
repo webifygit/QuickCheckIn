@@ -13,6 +13,9 @@ const AADHAAR_FIELDS = {
   address: 'Flat 402, Paud Road, Pune, Maharashtra, 411038',
 };
 
+// A key in the shape the server mints them; the API refuses anything else.
+const DOCUMENT_KEY = '1788245002600-7a5fbbc0520ff8dd7a5fbbc0520ff8dd.png';
+
 const cardPhoto = () =>
   new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'aadhaar.png', { type: 'image/png' });
 
@@ -36,7 +39,7 @@ const renderForm = () => renderRoute(<RegisterForm />, { path: '/register', rout
 
 describe('RegisterForm - Aadhaar auto-fill', () => {
   it('fills the form from a scanned card', async () => {
-    mockScan({ imagePath: 'uploads/abc.png', fields: AADHAAR_FIELDS });
+    mockScan({ documentKey: DOCUMENT_KEY, fields: AADHAAR_FIELDS });
     const { user } = renderForm();
 
     await user.upload(screen.getByLabelText(/upload a photo/i), cardPhoto());
@@ -49,7 +52,7 @@ describe('RegisterForm - Aadhaar auto-fill', () => {
   });
 
   it('leaves auto-filled values editable', async () => {
-    mockScan({ imagePath: 'uploads/abc.png', fields: AADHAAR_FIELDS });
+    mockScan({ documentKey: DOCUMENT_KEY, fields: AADHAAR_FIELDS });
     const { user } = renderForm();
 
     await user.upload(screen.getByLabelText(/upload a photo/i), cardPhoto());
@@ -62,7 +65,7 @@ describe('RegisterForm - Aadhaar auto-fill', () => {
 
   it('shows the fallback message and keeps the form usable when the QR is unreadable', async () => {
     mockScan({
-      imagePath: 'uploads/blurry.png',
+      documentKey: DOCUMENT_KEY,
       fields: null,
       message: "Couldn't read the QR code on this image.",
     });
@@ -81,7 +84,7 @@ describe('RegisterForm - Aadhaar auto-fill', () => {
 
     await user.upload(screen.getByLabelText(/upload a photo/i), cardPhoto());
 
-    expect(await screen.findByText(/couldn't read this image/i)).toBeInTheDocument();
+    expect(await screen.findByText(/you can fill the form in yourself/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /submit registration/i })).toBeEnabled();
   });
 });
@@ -108,7 +111,7 @@ describe('RegisterForm - submission', () => {
     await user.click(screen.getByLabelText(/i confirm the above details/i));
     await user.click(screen.getByRole('button', { name: /submit registration/i }));
 
-    expect(await screen.findByText(/thank you/i)).toBeInTheDocument();
+    expect(await screen.findByText(/you're all set/i)).toBeInTheDocument();
     expect(submissions).toHaveLength(1);
     expect(submissions[0]).toMatchObject({
       fullName: 'Asha Kulkarni',
@@ -118,8 +121,8 @@ describe('RegisterForm - submission', () => {
     });
   });
 
-  it('sends the uploaded image path alongside the details', async () => {
-    mockScan({ imagePath: 'uploads/abc.png', fields: AADHAAR_FIELDS });
+  it('sends the uploaded document key alongside the details', async () => {
+    mockScan({ documentKey: DOCUMENT_KEY, fields: AADHAAR_FIELDS });
     const submissions = captureSubmission();
     const { user } = renderForm();
 
@@ -130,7 +133,7 @@ describe('RegisterForm - submission', () => {
     await user.click(screen.getByRole('button', { name: /submit registration/i }));
 
     await waitFor(() => expect(submissions).toHaveLength(1));
-    expect(submissions[0].idDocumentImagePath).toBe('uploads/abc.png');
+    expect(submissions[0].idDocumentKey).toBe(DOCUMENT_KEY);
     expect(submissions[0].idNumber).toBe('XXXX XXXX 1234');
   });
 
@@ -148,6 +151,6 @@ describe('RegisterForm - submission', () => {
     await user.click(screen.getByRole('button', { name: /submit registration/i }));
 
     expect(await screen.findByText(/fullname and phone are required/i)).toBeInTheDocument();
-    expect(screen.queryByText(/thank you/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/you're all set/i)).not.toBeInTheDocument();
   });
 });

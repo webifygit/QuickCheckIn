@@ -1,0 +1,173 @@
+/* Design tokens.
+ *
+ * Every colour in the app resolves to one of these. The light palette is
+ * defined on bare :root so it is always the fallback; the dark palette only
+ * redefines values, never introduces a colour that exists nowhere else. */
+
+:root {
+  /* --- neutrals: a warm grey, not a blue one. Hospitality, not fintech. --- */
+  --bg: #f6f5f2;
+  --surface: #ffffff;
+  --surface-sunken: #faf9f6;
+  --surface-hover: #f2f0ec;
+  --border: #e4e1da;
+  --border-strong: #d3cfc5;
+
+  --text: #1b1a18;
+  --text-muted: #6a665e;
+  --text-subtle: #8d887e;
+  --text-on-accent: #ffffff;
+
+  /* --- brand: deep teal reads as calm and trustworthy, and stays legible
+         against both the warm light ground and the dark one. --- */
+  --accent: #10606b;
+  --accent-hover: #0c4b54;
+  --accent-active: #093a41;
+  --accent-soft: #e2f0f1;
+  --accent-border: #b6d8db;
+
+  --danger: #b4231f;
+  --danger-soft: #fdeceb;
+  --danger-border: #f2c4c2;
+
+  --success: #1c6b3f;
+  --success-soft: #e5f3ea;
+
+  --warning: #8a5a08;
+  --warning-soft: #fdf1dc;
+
+  /* --- status pills. Named by meaning so a status rename is one line. --- */
+  --status-pending-fg: #8a5a08;
+  --status-pending-bg: #fdf1dc;
+  --status-approved-fg: #1a4f7a;
+  --status-approved-bg: #e3eefa;
+  --status-checked-in-fg: #1c6b3f;
+  --status-checked-in-bg: #e5f3ea;
+  --status-rejected-fg: #a3231f;
+  --status-rejected-bg: #fdeceb;
+
+  /* --- shape & depth --- */
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgb(28 26 24 / 6%);
+  --shadow: 0 2px 8px rgb(28 26 24 / 8%), 0 1px 2px rgb(28 26 24 / 4%);
+  --shadow-lg: 0 12px 32px rgb(28 26 24 / 12%), 0 2px 8px rgb(28 26 24 / 6%);
+
+  /* --- spacing scale. Four-point, so vertical rhythm stays predictable. --- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  --content-width: 1120px;
+  --form-width: 640px;
+
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+  --transition: 140ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #14161a;
+    --surface: #1c1f25;
+    --surface-sunken: #191c21;
+    --surface-hover: #242830;
+    --border: #2c313a;
+    --border-strong: #3d434e;
+
+    --text: #e9e7e3;
+    --text-muted: #a3a09a;
+    --text-subtle: #807d77;
+    --text-on-accent: #06232a;
+
+    --accent: #4ecdc4;
+    --accent-hover: #6fd8d0;
+    --accent-active: #8ae2dc;
+    --accent-soft: #12312f;
+    --accent-border: #1f4b48;
+
+    --danger: #f2837e;
+    --danger-soft: #35191a;
+    --danger-border: #5a2725;
+
+    --success: #6cc48d;
+    --success-soft: #14291d;
+
+    --warning: #e0b062;
+    --warning-soft: #2e2415;
+
+    --status-pending-fg: #e0b062;
+    --status-pending-bg: #2e2415;
+    --status-approved-fg: #7db4e8;
+    --status-approved-bg: #16263a;
+    --status-checked-in-fg: #6cc48d;
+    --status-checked-in-bg: #14291d;
+    --status-rejected-fg: #f2837e;
+    --status-rejected-bg: #35191a;
+
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 30%);
+    --shadow: 0 2px 8px rgb(0 0 0 / 36%), 0 1px 2px rgb(0 0 0 / 24%);
+    --shadow-lg: 0 12px 32px rgb(0 0 0 / 44%), 0 2px 8px rgb(0 0 0 / 28%);
+
+    color-scheme: dark;
+  }
+}
+
+/* An explicit choice wins over the system preference in both directions. */
+:root[data-theme='dark'] {
+  --bg: #14161a;
+  --surface: #1c1f25;
+  --surface-sunken: #191c21;
+  --surface-hover: #242830;
+  --border: #2c313a;
+  --border-strong: #3d434e;
+
+  --text: #e9e7e3;
+  --text-muted: #a3a09a;
+  --text-subtle: #807d77;
+  --text-on-accent: #06232a;
+
+  --accent: #4ecdc4;
+  --accent-hover: #6fd8d0;
+  --accent-active: #8ae2dc;
+  --accent-soft: #12312f;
+  --accent-border: #1f4b48;
+
+  --danger: #f2837e;
+  --danger-soft: #35191a;
+  --danger-border: #5a2725;
+
+  --success: #6cc48d;
+  --success-soft: #14291d;
+
+  --warning: #e0b062;
+  --warning-soft: #2e2415;
+
+  --status-pending-fg: #e0b062;
+  --status-pending-bg: #2e2415;
+  --status-approved-fg: #7db4e8;
+  --status-approved-bg: #16263a;
+  --status-checked-in-fg: #6cc48d;
+  --status-checked-in-bg: #14291d;
+  --status-rejected-fg: #f2837e;
+  --status-rejected-bg: #35191a;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 30%);
+  --shadow: 0 2px 8px rgb(0 0 0 / 36%), 0 1px 2px rgb(0 0 0 / 24%);
+  --shadow-lg: 0 12px 32px rgb(0 0 0 / 44%), 0 2px 8px rgb(0 0 0 / 28%);
+
+  color-scheme: dark;
+}

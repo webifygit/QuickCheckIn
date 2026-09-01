@@ -32,6 +32,14 @@ export default defineConfig({
     {
       command: 'npm --prefix server run start',
       url: `${SERVER_URL}/api/health`,
+      // The suite submits enough forms that back-to-back runs would exhaust the
+      // production rate limits and fail for the wrong reason. Nothing here tests
+      // the limiter itself.
+      env: {
+        RATE_LIMIT_PUBLIC_MAX: '1000',
+        RATE_LIMIT_SCAN_MAX: '1000',
+        RATE_LIMIT_LOGIN_MAX: '1000',
+      },
       reuseExistingServer: !process.env.CI,
       timeout: 60_000,
       stdout: 'pipe',

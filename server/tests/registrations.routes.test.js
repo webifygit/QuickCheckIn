@@ -19,6 +19,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   prisma.registration.create.mockImplementation(async ({ data }) => ({ id: 'reg_1', ...data }));
   prisma.registration.findMany.mockResolvedValue([]);
+  prisma.registration.count.mockResolvedValue(0);
   prisma.registration.findUnique.mockResolvedValue({ id: 'reg_1', fullName: 'Asha Kulkarni' });
   prisma.registration.update.mockImplementation(async ({ data }) => ({ id: 'reg_1', ...data }));
 });
@@ -155,9 +156,12 @@ describe('GET /api/registrations', () => {
     const res = await auth(request(app).get('/api/registrations'));
 
     expect(res.status).toBe(200);
+    expect(res.body.registrations).toEqual([]);
     expect(prisma.registration.findMany).toHaveBeenCalledWith({
-      where: undefined,
+      where: {},
       orderBy: { createdAt: 'desc' },
+      take: 100,
+      skip: 0,
     });
   });
 
@@ -167,6 +171,8 @@ describe('GET /api/registrations', () => {
     expect(prisma.registration.findMany).toHaveBeenCalledWith({
       where: { status: 'PENDING' },
       orderBy: { createdAt: 'desc' },
+      take: 100,
+      skip: 0,
     });
   });
 });
@@ -232,14 +238,19 @@ describe('PATCH /api/registrations/:id', () => {
   it('404s when the row does not exist', async () => {
     const notFound = Object.assign(new Error('Record to update not found'), { code: 'P2025' });
     prisma.registration.update.mockRejectedValue(notFound);
-    const res = await auth(request(app).patch('/api/registrations/nope').send({ phone: '1' }));
+    prisma.registration.findUnique.mockResolvedValue({ id: 'nope', fullName: 'Asha Kulkarni' });
+    const res = await auth(
+      request(app).patch('/api/registrations/nope').send({ phone: '9000000000' })
+    );
 
     expect(res.status).toBe(404);
   });
 
   it('does not disguise an unexpected database failure as a 404', async () => {
     prisma.registration.update.mockRejectedValue(new Error('connection lost'));
-    const res = await auth(request(app).patch('/api/registrations/reg_1').send({ phone: '1' }));
+    const res = await auth(
+      request(app).patch('/api/registrations/reg_1').send({ phone: '9000000000' })
+    );
 
     expect(res.status).toBe(500);
   });

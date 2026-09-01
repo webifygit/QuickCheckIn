@@ -24,12 +24,22 @@ const rows = [
   },
 ];
 
+// The list endpoint returns an envelope so the dashboard can show a total
+// without counting the page it happens to be holding.
+const listBody = (registrations = rows) => ({
+  registrations,
+  total: registrations.length,
+  take: 100,
+  skip: 0,
+});
+
 function mockList(handler) {
   const calls = [];
   server.use(
     http.get(`${API}/api/registrations`, ({ request }) => {
-      calls.push(new URL(request.url).searchParams.get('status'));
-      return handler ? handler() : HttpResponse.json(rows);
+      const params = new URL(request.url).searchParams;
+      calls.push({ status: params.get('status'), search: params.get('search') });
+      return handler ? handler() : HttpResponse.json(listBody());
     })
   );
   return calls;
@@ -46,9 +56,10 @@ describe('Dashboard', () => {
 
     expect(await screen.findByText('Asha Kulkarni')).toBeInTheDocument();
     expect(screen.getByText('Ramesh Kulkarni')).toBeInTheDocument();
+
     const row = screen.getByText('Asha Kulkarni').closest('tr');
-    expect(within(row).getByText('PENDING')).toBeInTheDocument();
-    expect(within(row).getByRole('link', { name: /view/i })).toHaveAttribute(
+    expect(within(row).getByText('Pending')).toBeInTheDocument();
+    expect(within(row).getByRole('link', { name: /review asha kulkarni/i })).toHaveAttribute(
       'href',
       '/dashboard/reg_1'
     );
@@ -70,19 +81,61 @@ describe('Dashboard', () => {
 
     const { user } = renderDashboard();
     await screen.findByText('Asha Kulkarni');
-    await user.click(screen.getByRole('button', { name: 'PENDING' }));
+    await user.click(screen.getByRole('button', { name: 'Pending' }));
 
     await screen.findByText('Asha Kulkarni');
-    expect(calls).toEqual([null, 'PENDING']);
+    expect(calls.map((call) => call.status)).toEqual([null, 'PENDING']);
+  });
+
+  it('marks the active filter for assistive tech, not only with colour', async () => {
+    loginAsStaff();
+    mockList();
+
+    const { user } = renderDashboard();
+    await screen.findByText('Asha Kulkarni');
+
+    expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(screen.getByRole('button', { name: 'Approved' }));
+    expect(screen.getByRole('button', { name: 'Approved' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+  });
+
+  it('searches by name, phone or email', async () => {
+    loginAsStaff();
+    const calls = mockList();
+
+    const { user } = renderDashboard();
+    await screen.findByText('Asha Kulkarni');
+
+    await user.type(screen.getByRole('searchbox', { name: /search/i }), 'asha');
+
+    // Debounced, so the request lands after typing settles.
+    await screen.findByText('Asha Kulkarni');
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    expect(calls.at(-1).search).toBe('asha');
   });
 
   it('shows an empty state when there is nothing to review', async () => {
     loginAsStaff();
-    mockList(() => HttpResponse.json([]));
+    mockList(() => HttpResponse.json(listBody([])));
 
     renderDashboard();
 
     expect(await screen.findByText(/no registrations yet/i)).toBeInTheDocument();
+  });
+
+  it('distinguishes an empty filter from an empty database', async () => {
+    loginAsStaff();
+    mockList(() => HttpResponse.json(listBody([])));
+
+    const { user } = renderDashboard();
+    await screen.findByText(/no registrations yet/i);
+
+    await user.click(screen.getByRole('button', { name: 'Rejected' }));
+
+    expect(await screen.findByText(/nothing matches those filters/i)).toBeInTheDocument();
   });
 
   it('signs the staff member out when the token is no longer accepted', async () => {
@@ -98,11 +151,13 @@ describe('Dashboard', () => {
 
   it('reports a server failure without signing the staff member out', async () => {
     loginAsStaff();
-    mockList(() => HttpResponse.json({ error: 'boom' }, { status: 500 }));
+    mockList(() =>
+      HttpResponse.json({ error: 'Something went wrong on our end.' }, { status: 500 })
+    );
 
     renderDashboard();
 
-    expect(await screen.findByText(/failed to load registrations/i)).toBeInTheDocument();
+    expect(await screen.findByText(/something went wrong on our end/i)).toBeInTheDocument();
     expect(localStorage.getItem('staffToken')).toBe('staff-token');
   });
 
@@ -112,7 +167,7 @@ describe('Dashboard', () => {
 
     const { user } = renderDashboard();
     await screen.findByText('Asha Kulkarni');
-    await user.click(screen.getByRole('button', { name: /log out/i }));
+    await user.click(screen.getByRole('button', { name: /sign out/i }));
 
     expect(await screen.findByText('login page')).toBeInTheDocument();
     expect(localStorage.getItem('staffToken')).toBeNull();

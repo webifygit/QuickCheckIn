@@ -53,7 +53,7 @@ describe('Login', () => {
     const { user } = renderRoute(<Login />, { path: '/login', route: '/login' });
     await signIn(user);
 
-    expect(await screen.findByText('Login failed')).toBeInTheDocument();
+    expect(await screen.findByText(/could not reach the server/i)).toBeInTheDocument();
   });
 
   it('disables the submit button while the request is in flight', async () => {

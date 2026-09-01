@@ -14,6 +14,7 @@ export function createPrismaMock() {
       findMany: vi.fn(),
       findUnique: vi.fn(),
       update: vi.fn(),
+      count: vi.fn(),
     },
   };
 }

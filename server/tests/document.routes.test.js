@@ -47,7 +47,7 @@ describe('POST /api/document/scan', () => {
       gender: 'FEMALE',
       idNumber: 'XXXX XXXX 1234',
     });
-    expect(res.body.imagePath).toMatch(/\.png$/);
+    expect(res.body.documentKey).toMatch(/\.png$/);
   }, 30000);
 
   it('never returns a full Aadhaar number to the browser', async () => {
@@ -80,7 +80,7 @@ describe('POST /api/document/scan', () => {
     expect(res.body.fields).toBeNull();
     expect(res.body.message).toMatch(/fill the form in yourself/i);
     // The upload is still kept, so the guest does not have to re-photograph it.
-    expect(res.body.imagePath).toMatch(/\.png$/);
+    expect(res.body.documentKey).toMatch(/\.png$/);
   }, 30000);
 
   it('falls back to manual entry for a QR that is not an Aadhaar card', async () => {
@@ -114,7 +114,7 @@ describe('POST /api/document/scan', () => {
       });
 
     expect(res.status).toBeGreaterThanOrEqual(400);
-    expect(res.body.error).toMatch(/JPEG, PNG, or WEBP/i);
+    expect(res.body.error).toMatch(/JPEG, PNG or WEBP/i);
   });
 
   it('stores uploads under the configured upload directory only', async () => {

@@ -1,83 +1,151 @@
-# Hotel Guest Self-Registration
+# QuickCheckIn — Hotel Guest Self-Registration
 
 Guests fill out their own hotel registration via a shared link. Uploading a photo
 of their Aadhaar card auto-fills the form by decoding the card's QR code. Hotel
 staff review and approve submissions from a dashboard.
 
-## Stack
-
-- `client/` — React + Vite, guest-facing form + staff dashboard
-- `server/` — Node/Express API, Prisma ORM, Aadhaar QR decoding (`jsqr` + `jimp`)
+- `client/` — React + Vite. Guest form and staff dashboard.
+- `server/` — Node/Express, Prisma ORM, Aadhaar QR decoding (`jsqr` + `jimp`).
 
 ## How auto-fill works
 
 Aadhaar cards carry a QR code with the holder's name, date of birth, gender, and
 address. The server decodes it locally — **no third-party OCR service, no API
-keys, no per-scan cost, and the ID image never leaves your server.**
+keys, no per-scan cost, and the ID image never leaves your infrastructure.**
 
 Two QR formats are supported:
+
 - **Secure QR** (cards issued 2018 onwards): gzip-compressed, `0xFF`-delimited fields
 - **Legacy XML QR** (older cards): `<PrintLetterBarcodeData .../>`
 
 If the QR can't be read (old card, blurry photo, non-Aadhaar ID), the guest
 simply fills the form in by hand — nothing breaks.
 
-**Aadhaar numbers are masked to the last 4 digits** (`XXXX XXXX 1234`) before
-storage. Private entities in India generally may not store full Aadhaar numbers,
-and the secure QR only exposes the last 4 anyway.
+## How personal data is handled
 
-## One-time setup
+This is the part that matters most, because the app holds Indian ID data.
 
-### 1. Database (Postgres via Neon)
+| | |
+| --- | --- |
+| **Aadhaar numbers** | Stored masked to the last 4 digits (`XXXX XXXX 1234`). The full number is never written to the database or returned to a browser. Private entities in India generally may not store full Aadhaar numbers, and the secure QR only exposes the last 4 anyway. |
+| **ID photos** | Never served from a public path. There is no static `/uploads` route. The image is streamed through `GET /api/registrations/:id/document`, which requires a staff token. |
+| **Deletion** | The photo is **permanently deleted** the moment a reviewer approves, checks in, or rejects the registration. Only `idDocumentDeletedAt` remains, so an audit can see that an image existed and was disposed of. |
+| **Abandoned uploads** | A guest who uploads a photo and then closes the tab leaves an image referenced by nothing. A sweeper deletes unreferenced objects older than `ORPHAN_UPLOAD_TTL_MINUTES` (default 2 hours). |
+| **Logs** | Names, phone numbers, addresses, dates of birth, ID numbers and auth headers are redacted before anything is written. |
 
-1. Create a free project at [neon.tech](https://neon.tech).
-2. Copy the connection string it gives you (starts with `postgresql://...`).
+## Security posture
 
-### 2. Environment variables
+- **Passwords** — bcrypt, cost 12. Login runs a comparison even when the email
+  does not exist, so response timing does not reveal which staff emails are real.
+- **Tokens** — HS256 JWTs with a pinned algorithm (an `alg: none` token cannot
+  verify). Stateless, so a disabled account keeps access until its token expires;
+  shorten `JWT_EXPIRES_IN` if you need faster revocation.
+- **CORS** — locked to the origins in `CORS_ORIGINS`. A wildcard is *refused* at
+  boot in production.
+- **Rate limiting** — separate budgets for form submission, image scanning and
+  login. The scan endpoint is the most expensive thing the server does and gets
+  the tightest limit.
+- **Uploads** — 8MB cap, and the file's real magic bytes are checked; a renamed
+  `.pdf` or script claiming `image/png` is rejected.
+- **Decoding limits** — images are downscaled before decoding and gzip payloads
+  are bounded, so one crafted upload cannot exhaust memory.
+- **Errors** — internal messages are logged in full but never returned. Callers
+  get a generic message plus a request id to quote.
+- **Config** — validated at boot. A short `JWT_SECRET` or a missing `S3_BUCKET`
+  stops the process with a readable message rather than failing under load.
 
-```
+## Setup
+
+### 1. Database
+
+Any Postgres works — [Neon](https://neon.tech), RDS, or the container in
+`docker-compose.yml`.
+
+### 2. Environment
+
+```bash
 cd server
 cp .env.example .env
 ```
 
-Edit `server/.env`:
-- `DATABASE_URL` → your Neon connection string
-- `JWT_SECRET` → any long random string
-- `SEED_STAFF_EMAIL` / `SEED_STAFF_PASSWORD` → the first staff login you want seeded
+Every variable is documented in [`server/.env.example`](server/.env.example).
+The ones you must set:
 
-```
+- `DATABASE_URL` — your Postgres connection string
+- `JWT_SECRET` — at least 32 characters (`openssl rand -base64 48`)
+- `SEED_STAFF_PASSWORD` — the first staff password; seeding refuses to run without it
+
+```bash
 cd ../client
 cp .env.example .env
 ```
 
-The default `VITE_API_BASE_URL=http://localhost:4000` works for local dev as-is.
+`VITE_API_BASE_URL=http://localhost:4000` works for local dev as-is.
 
-## Install & run
+### 3. Install and run
 
-```
+```bash
 # server
 cd server
 npm install
-npx prisma migrate dev --name init
-npm run seed          # creates the first staff login from .env
-npm run dev            # http://localhost:4000
+npx prisma migrate deploy   # or `migrate dev` while developing
+npm run seed                # creates the first staff login
+npm run dev                 # http://localhost:4000
 
 # client (separate terminal)
 cd client
 npm install
-npm run dev            # http://localhost:5173
+npm run dev                 # http://localhost:5173
 ```
 
-- Guest registration form: `http://localhost:5173/register`
-- Staff login: `http://localhost:5173/login` (use the credentials from `npm run seed`)
-- Staff dashboard: `http://localhost:5173/dashboard`
+- Guest form: `http://localhost:5173/register`
+- Staff login: `http://localhost:5173/login`
+
+## Deploying
+
+The app is deploy-agnostic. There is a `Dockerfile` for each half and a
+`docker-compose.yml` that runs the whole stack:
+
+```bash
+docker compose up --build     # API on :4000, web on :8080
+```
+
+**The one decision you cannot skip is where ID images live.**
+
+| Platform | Setting |
+| --- | --- |
+| VPS / bare metal with a persistent disk | `STORAGE_DRIVER=local` and mount a volume at `/app/uploads` |
+| Render, Railway, Fly, Heroku, or anything with ephemeral disks | `STORAGE_DRIVER=s3` — **required.** Local files are discarded on every deploy, which would silently destroy ID images that have not yet been reviewed |
+
+For `s3`, set `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID` and
+`S3_SECRET_ACCESS_KEY`. Any S3-compatible store works (AWS, Cloudflare R2,
+Backblaze, MinIO) — set `S3_ENDPOINT` for the non-AWS ones. **Keep the bucket
+private.** The app streams objects through an authenticated route and never
+hands out object URLs.
+
+Also set, in production:
+
+- `NODE_ENV=production`
+- `CORS_ORIGINS` — your real web origin, comma-separated for more than one
+- `TRUST_PROXY_HOPS` — how many proxies sit in front (1 behind a single nginx or
+  load balancer). Rate limiting is only as honest as this number: set it too high
+  and any client can forge its own IP for a fresh quota.
+
+Migrations run with `npx prisma migrate deploy`, which only applies committed
+migrations and never resets anything. The compose file does this before the
+server starts.
+
+### Health checks
+
+- `GET /api/health` — liveness. Does not touch the database, so a database blip
+  will not make an orchestrator kill a healthy container.
+- `GET /api/ready` — readiness. Runs `SELECT 1`; returns 503 if the database is
+  unreachable.
 
 ## Tests
 
-Three layers, each runnable on its own:
-
-```
-npm test          # server + client unit/integration suites (no database needed)
+```bash
+npm test          # server + client suites (no database needed)
 npm run test:e2e  # end-to-end in a real browser (needs the database)
 npm run test:all  # everything
 ```
@@ -96,36 +164,56 @@ than stubbing modules, so the axios client and its auth interceptor run for real
 ### End-to-end runs
 
 `npm run test:e2e` starts the API and the Vite dev server itself, then drives
-Chromium through the real flows: guest scans a card and submits, staff sign in,
-correct a detail, approve, and filter the dashboard.
-
-It uses the database named by `server/.env` → `DATABASE_URL`. It seeds its own
-staff account (`e2e-staff@test.local`), tags every row it creates, and deletes
-both on teardown — but point it at a scratch database or a Neon branch if you
-would rather it never touch your working data.
+Chromium through the real flows. It uses the database named by
+`server/.env` → `DATABASE_URL`, seeds its own staff account
+(`e2e-staff@test.local`), tags every row it creates, and deletes both on
+teardown — but point it at a scratch database or a Neon branch if you would
+rather it never touch your working data.
 
 First run only:
 
-```
+```bash
 npx playwright install chromium
 ```
 
-What the suite locks down:
+What the suites lock down:
 
 - Both QR formats map onto the right form fields, and **Aadhaar numbers are
   never returned in full** — only `XXXX XXXX 1234`, asserted at every layer
 - Unreadable, non-Aadhaar and corrupt QR codes degrade to manual entry, never a 500
-- Optional dates and guest counts may be left blank
-- Staff routes reject missing, malformed, forged and expired tokens; a stale
-  token drops the user back at the login screen
-- Guests cannot set `status`, `id` or `reviewedByStaffId` on their own
-  submission; the reviewer is always taken from the staff token
+- ID images are unreachable without a staff token, and the old static path is gone
+- Approving deletes the image from storage, not just from the row
+- Staff routes reject missing, malformed, forged and expired tokens
+- Guests cannot set `status`, `id`, `reviewedByStaffId`, or point a record at a
+  storage key the server did not mint
+- A stay cannot end before it starts, and an unknown status is a 400, not a 500
+- A database failure returns an error instead of hanging the request
 
-## Notes
+## Known limitations
 
-- Auto-filled fields are always editable — guests review and correct them before
-  submitting, and staff can edit again from the dashboard.
-- Uploaded ID images are stored under `server/uploads/`. This is fine for local
-  use; swap for S3/GCS storage before any real production deployment, since
-  these files contain sensitive personal ID data.
-- To view/edit the database directly: `cd server && npx prisma studio`.
+Worth saying plainly before this goes in front of guests:
+
+1. **No real Aadhaar card has been decoded by this code.** The test fixtures are
+   built from the same format assumptions the parser makes, so they prove the
+   parser is self-consistent — not that it matches what UIDAI actually prints.
+   The failure mode is graceful (the guest types their details in), but the
+   auto-fill hit rate is unmeasured.
+
+   **Measure it before launch** with the bundled diagnostic:
+
+   ```bash
+   cd server
+   npm run scan:check -- ~/cards/*.jpg
+   ```
+
+   It prints, per card, whether the QR was found, which format it was, and
+   exactly which fields resolved — then a hit-rate summary. Nothing is uploaded
+   or stored, and full Aadhaar numbers are never printed. It exits non-zero only
+   if a 12-digit number ever survives masking, so it can also run in CI.
+2. **Token revocation waits for expiry.** Disabling a staff account does not end
+   their current session; see `JWT_EXPIRES_IN`.
+3. **Check-in and check-out are stored as timestamps**, not dates. They are
+   handled consistently, but a deployment spanning timezones should move them to
+   a `date` column.
+4. **No audit log of staff edits.** You can see who last reviewed a registration
+   and when, but not the history of what they changed.

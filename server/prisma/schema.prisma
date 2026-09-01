@@ -27,30 +27,47 @@ model StaffUser {
   email        String         @unique
   passwordHash String
   name         String
+  isActive     Boolean        @default(true)
   createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
   reviewed     Registration[] @relation("ReviewedBy")
 }
 
 model Registration {
-  id                   String             @id @default(cuid())
-  fullName             String
-  dob                  String?
-  gender               String?
-  nationality          String?
-  idType               IdType             @default(AADHAAR)
-  idNumber             String?
-  address              String?
-  phone                String
-  email                String?
-  checkInDate          DateTime?
-  checkOutDate         DateTime?
-  purposeOfVisit       String?
-  vehicleNumber        String?
-  numberOfGuests       Int                @default(1)
-  idDocumentImagePath  String?
-  status               RegistrationStatus @default(PENDING)
-  consentGiven         Boolean            @default(false)
-  createdAt            DateTime           @default(now())
-  reviewedByStaffId    String?
-  reviewedByStaff      StaffUser?         @relation("ReviewedBy", fields: [reviewedByStaffId], references: [id])
+  id             String  @id @default(cuid())
+  fullName       String
+  dob            String?
+  gender         String?
+  nationality    String?
+  idType         IdType  @default(AADHAAR)
+  // Aadhaar is stored masked ("XXXX XXXX 1234"). Full numbers are never persisted.
+  idNumber       String?
+  address        String?
+  phone          String
+  email          String?
+  checkInDate    DateTime?
+  checkOutDate   DateTime?
+  purposeOfVisit String?
+  vehicleNumber  String?
+  numberOfGuests Int     @default(1)
+
+  // Opaque key into the storage driver - not a URL and not a filesystem path.
+  // The image is purged once staff approve, and idDocumentDeletedAt records that
+  // it existed and was disposed of, which is what an audit actually needs.
+  idDocumentKey       String?
+  idDocumentDeletedAt DateTime?
+
+  status       RegistrationStatus @default(PENDING)
+  consentGiven Boolean            @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reviewedByStaffId String?
+  reviewedAt        DateTime?
+  reviewedByStaff   StaffUser? @relation("ReviewedBy", fields: [reviewedByStaffId], references: [id])
+
+  // The dashboard always reads newest-first, optionally filtered by status.
+  @@index([status, createdAt])
+  @@index([createdAt])
 }

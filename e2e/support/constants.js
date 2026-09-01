@@ -7,3 +7,7 @@ export const E2E_STAFF = {
 };
 
 export const E2E_MARKER = 'e2e-test-run';
+
+// baseURL points at the Vite dev server, so API-level assertions need the API's
+// own origin - otherwise the SPA fallback answers and every check passes.
+export const API_URL = process.env.E2E_API_URL || 'http://localhost:4000';

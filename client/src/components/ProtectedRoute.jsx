@@ -1,9 +1,15 @@
-import { Navigate } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
+import { getToken } from '../api/client';
 
 export default function ProtectedRoute({ children }) {
-  const token = localStorage.getItem('staffToken');
+  const location = useLocation();
+  const token = getToken();
+
   if (!token) {
-    return <Navigate to="/login" replace />;
+    // Remember where they were headed so signing in returns them there rather
+    // than dumping everyone on the dashboard.
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
+
   return children;
 }
