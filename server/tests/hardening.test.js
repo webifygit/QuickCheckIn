@@ -3,21 +3,22 @@ import fs from 'node:fs';
 import jwt from 'jsonwebtoken';
 import request from 'supertest';
 import { createRequire } from 'node:module';
-import { loadAppWithPrismaMock } from './helpers/app.js';
+import { loadAppWithPrismaMock, mockSignedInStaff, signStaffToken, STAFF_ROW } from './helpers/app.js';
 
 const require = createRequire(import.meta.url);
 const { storage } = require('../src/lib/storage');
 
 const { app, prisma } = loadAppWithPrismaMock();
 
-const STAFF = { staffId: 'staff_1', email: 'admin@hotel.local', name: 'Front Desk Admin' };
-const token = jwt.sign(STAFF, process.env.JWT_SECRET, { expiresIn: '12h' });
+const STAFF = { staffId: STAFF_ROW.id, email: STAFF_ROW.email, name: STAFF_ROW.name };
+const token = signStaffToken();
 const auth = (req) => req.set('Authorization', `Bearer ${token}`);
 
 const validGuest = { fullName: 'Asha Kulkarni', phone: '9876543210', consentGiven: true };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockSignedInStaff(prisma);
   prisma.registration.create.mockImplementation(async ({ data }) => ({ id: 'reg_1', ...data }));
   prisma.registration.update.mockImplementation(async ({ data }) => ({ id: 'reg_1', ...data }));
   prisma.registration.findMany.mockResolvedValue([]);

@@ -28,6 +28,10 @@ model StaffUser {
   passwordHash String
   name         String
   isActive     Boolean        @default(true)
+  // Bumped to invalidate every token already issued to this account - a
+  // password reset, or "sign this person out now". Tokens carry the value
+  // they were minted with, so an older one no longer matches.
+  tokenVersion Int            @default(0)
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
   reviewed     Registration[] @relation("ReviewedBy")

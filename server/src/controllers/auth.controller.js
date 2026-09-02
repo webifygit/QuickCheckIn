@@ -29,8 +29,11 @@ async function login(req, res) {
     return res.status(401).json({ error: 'Invalid email or password' });
   }
 
+  // ver pins the token to the account's current session generation. Raising
+  // StaffUser.tokenVersion invalidates every token issued before it - see
+  // requireStaffAuth and `npm run staff -- signout`.
   const token = jwt.sign(
-    { staffId: staff.id, email: staff.email, name: staff.name },
+    { staffId: staff.id, email: staff.email, name: staff.name, ver: staff.tokenVersion ?? 0 },
     config.JWT_SECRET,
     { expiresIn: config.JWT_EXPIRES_IN }
   );

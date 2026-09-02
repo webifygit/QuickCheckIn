@@ -15,7 +15,8 @@
     "seed": "node src/seed.js",
     "migrate:deploy": "prisma migrate deploy",
     "start:migrate": "prisma migrate deploy && node src/index.js",
-    "scan:check": "node scripts/scan-check.js"
+    "scan:check": "node scripts/scan-check.js",
+    "staff": "node scripts/staff-access.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1123.0",

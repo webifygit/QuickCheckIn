@@ -38,8 +38,10 @@ This is the part that matters most, because the app holds Indian ID data.
 - **Passwords** — bcrypt, cost 12. Login runs a comparison even when the email
   does not exist, so response timing does not reveal which staff emails are real.
 - **Tokens** — HS256 JWTs with a pinned algorithm (an `alg: none` token cannot
-  verify). Stateless, so a disabled account keeps access until its token expires;
-  shorten `JWT_EXPIRES_IN` if you need faster revocation.
+  verify). Every staff request re-reads the account, so disabling someone ends
+  the session they are already in rather than waiting for `JWT_EXPIRES_IN`. Each
+  token also carries the account's session generation; raising it invalidates
+  every token issued before it — see [Ending a staff session](#ending-a-staff-session).
 - **CORS** — locked to the origins in `CORS_ORIGINS`. A wildcard is *refused* at
   boot in production.
 - **Rate limiting** — separate budgets for form submission, image scanning and
@@ -135,6 +137,34 @@ Migrations run with `npx prisma migrate deploy`, which only applies committed
 migrations and never resets anything. The compose file does this before the
 server starts.
 
+### Ending a staff session
+
+Someone leaves, or a laptop goes missing, and their token is still valid for
+another twelve hours. From the `server` directory:
+
+```bash
+npm run staff -- list                        # who exists, active or not
+npm run staff -- disable alex@hotel.local    # blocks sign-in AND ends open sessions
+npm run staff -- enable  alex@hotel.local    # lets them sign in again
+npm run staff -- signout alex@hotel.local    # keeps the account, ends its sessions
+npm run staff -- signout --all               # after rotating JWT_SECRET, say
+```
+
+`disable` takes effect on their next request — seconds, not hours. `signout` is
+the one to use after a password reset: the account stays active, but every token
+issued before it stops working.
+
+Doing it straight in the database works too, which is the point of keeping it a
+column rather than a server-side session store: `UPDATE "StaffUser" SET
+"isActive" = false, "tokenVersion" = "tokenVersion" + 1 WHERE email = '...'`.
+
+**On the deploy that first adds this**, run the migration before (or with) the
+new server code — `npm run start:migrate` does both in order. New code against a
+database without the `tokenVersion` column fails every staff request. Everyone
+signed in at that moment has to sign in again once, because tokens issued before
+the upgrade carry no session generation and are refused rather than assumed to
+be generation 0.
+
 ### Health checks
 
 - `GET /api/health` — liveness. Does not touch the database, so a database blip
@@ -210,8 +240,11 @@ Worth saying plainly before this goes in front of guests:
    exactly which fields resolved — then a hit-rate summary. Nothing is uploaded
    or stored, and full Aadhaar numbers are never printed. It exits non-zero only
    if a 12-digit number ever survives masking, so it can also run in CI.
-2. **Token revocation waits for expiry.** Disabling a staff account does not end
-   their current session; see `JWT_EXPIRES_IN`.
+2. **Revocation costs a database read per staff request.** Ending a session
+   immediately means auth re-reads the account on every authenticated call — one
+   primary-key lookup. Fine at front-desk traffic; if that ever becomes the
+   bottleneck, cache the row for a few seconds and accept that much delay on a
+   revocation. A database outage returns 500 rather than signing everyone out.
 3. **Check-in and check-out are stored as timestamps**, not dates. They are
    handled consistently, but a deployment spanning timezones should move them to
    a `date` column.
