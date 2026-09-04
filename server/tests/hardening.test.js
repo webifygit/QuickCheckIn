@@ -26,6 +26,14 @@ beforeEach(() => {
 });
 
 describe('ID images are never exposed publicly', () => {
+  // The scheduled sweep endpoint deletes stored objects. No CRON_SECRET is set
+  // for this file, which is the normal case for a long-lived deployment where
+  // the sweeper runs on an interval - so the route must not be reachable.
+  it('does not expose the scheduled sweep endpoint without a cron secret', async () => {
+    const res = await request(app).post('/api/maintenance/sweep-orphans');
+    expect(res.status).toBe(404);
+  });
+
   it('does not serve uploads from a static path', async () => {
     const res = await request(app).get('/uploads/anything.png');
     expect(res.status).toBe(404);

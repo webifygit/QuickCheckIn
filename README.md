@@ -160,6 +160,26 @@ Use this when the client is served by a CDN or a separate static host. Here
 `CORS_ORIGINS` **must** name the web origin, and `VITE_API_BASE_URL` is a build
 argument, because Vite inlines it at build time.
 
+### Vercel
+
+`vercel.json` builds the client to the CDN and routes `/api/*` to a single
+serverless function wrapping the same Express app, so it is still one origin and
+`VITE_API_BASE_URL` stays empty. Two things differ from the shapes above, and
+both are the platform's, not the app's:
+
+- **Uploads are capped at 4MB.** A Vercel function cannot receive a request body
+  over 4.5MB, and the scan endpoint needs the card photo at full resolution -
+  the QR is around 137 modules across, so downscaling to fit is what stops it
+  decoding. Set `MAX_UPLOAD_BYTES=4194304`. A guest whose photo is larger gets
+  the "fill it in yourself" path rather than an error, but they do lose
+  auto-fill. The Docker shape above has no such limit.
+- **The orphan sweeper needs a scheduler.** There is no process to hold an
+  interval, so `vercel.json` schedules an hourly request to
+  `/api/maintenance/sweep-orphans`, which runs the same job. Set `CRON_SECRET`
+  or that route is not mounted, and the sweep never runs.
+
+`STORAGE_DRIVER=s3` is required here, for the reason in the table below.
+
 ### Deploy checklist
 
 Set these, whichever shape you chose:

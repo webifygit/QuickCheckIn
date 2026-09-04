@@ -1,5 +1,10 @@
 generator client {
   provider = "prisma-client-js"
+  // "native" covers local development and the Docker image. Vercel's functions
+  // run on Amazon Linux with OpenSSL 3, and Prisma ships a separate engine for
+  // it - without this the deployed function fails at query time with
+  // "Query engine library for current platform could not be found".
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {

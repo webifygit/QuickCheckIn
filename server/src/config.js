@@ -47,6 +47,11 @@ const schema = z
     // separate static host, which is what docker-compose.yml does.
     CLIENT_DIST_DIR: z.string().optional(),
 
+    // Set only on a serverless deployment, where the orphan sweep is driven by
+    // a scheduled request rather than an interval. Without it the maintenance
+    // route is not mounted. Must be long enough not to be guessable.
+    CRON_SECRET: z.string().min(24, 'CRON_SECRET must be at least 24 characters').optional(),
+
     RATE_LIMIT_WINDOW_MINUTES: z.coerce.number().int().positive().default(15),
 
     // Both public budgets are per-IP, and guests fill the form on the hotel's

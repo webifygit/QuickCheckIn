@@ -130,6 +130,11 @@ app.use('/api/document', scanLimiter, documentRoutes);
 // the guest form's quota - and behind one NAT address, the whole hotel shares it.
 app.use('/api/registrations', registrationsRoutes);
 
+// Only where a scheduler drives the orphan sweep - see maintenance.routes.js.
+if (config.CRON_SECRET) {
+  app.use('/api/maintenance', require('./routes/maintenance.routes'));
+}
+
 // Liveness: is the process up. Deliberately does not touch the database, so a
 // database blip does not cause the orchestrator to kill a healthy container.
 app.get('/api/health', (req, res) => res.json({ ok: true, uptime: process.uptime() }));

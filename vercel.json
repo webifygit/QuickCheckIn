@@ -1,0 +1,38 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "builds": [
+    {
+      "src": "client/package.json",
+      "use": "@vercel/static-build",
+      "config": { "distDir": "dist" }
+    },
+    {
+      "src": "server/api/index.js",
+      "use": "@vercel/node",
+      "config": { "maxLambdaSize": "50mb" }
+    }
+  ],
+  "routes": [
+    { "src": "/api/(.*)", "dest": "/server/api/index.js" },
+    {
+      "src": "/assets/(.*)",
+      "headers": { "cache-control": "public, max-age=31536000, immutable" },
+      "dest": "/client/dist/assets/$1"
+    },
+    {
+      "src": "/(.*\\.(?:svg|png|ico|webmanifest|txt))",
+      "dest": "/client/dist/$1"
+    },
+    {
+      "src": "/(.*)",
+      "headers": { "cache-control": "no-store" },
+      "dest": "/client/dist/index.html"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/maintenance/sweep-orphans",
+      "schedule": "0 * * * *"
+    }
+  ]
+}
