@@ -40,7 +40,13 @@ export default defineConfig({
         RATE_LIMIT_SCAN_MAX: '1000',
         RATE_LIMIT_LOGIN_MAX: '1000',
       },
-      reuseExistingServer: !process.env.CI,
+      // Never reuse a server this config did not start. Those raised limits
+      // only reach a process launched here, so reusing a dev server on :4000
+      // silently ran the suite against the production budgets instead - the
+      // run exhausts 10 logins and 120 public requests long before it ends,
+      // and four specs failed on 429s that looked like product bugs. Playwright
+      // now says the port is busy instead, which is a question with an answer.
+      reuseExistingServer: false,
       timeout: 60_000,
       stdout: 'pipe',
       stderr: 'pipe',
@@ -48,7 +54,7 @@ export default defineConfig({
     {
       command: 'npm --prefix client run dev -- --port 5173 --strictPort',
       url: CLIENT_URL,
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
       timeout: 60_000,
     },
   ],

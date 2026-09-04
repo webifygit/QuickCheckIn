@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A second push supersedes the first: nothing is learned from finishing a run
+# against a commit that is already stale.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Unit tests & build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            client/package-lock.json
+
+      - name: Install
+        run: |
+          npm ci
+          npm --prefix server ci
+          npm --prefix client ci
+
+      # The server imports @prisma/client at load, so the client has to exist
+      # before any server test runs. No database is contacted: the unit suite
+      # stubs Prisma and never opens a connection.
+      - name: Generate Prisma client
+        run: npm --prefix server run prisma:generate
+
+      - name: Server tests
+        run: npm --prefix server run test
+
+      - name: Client lint
+        run: npm --prefix client run lint
+
+      - name: Client tests
+        run: npm --prefix client run test
+
+      # Catches what tests cannot: a bad import path or a JSX error that only
+      # the production build resolves.
+      - name: Client build
+        run: npm --prefix client run build
+
+  e2e:
+    name: End-to-end
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: quickcheckin
+          POSTGRES_PASSWORD: quickcheckin
+          POSTGRES_DB: quickcheckin_e2e
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://quickcheckin:quickcheckin@localhost:5432/quickcheckin_e2e
+      # CI-only value. The suite signs in as staff, so the API needs a secret
+      # that satisfies the 32-character floor - it is not a deployed key.
+      JWT_SECRET: ci-only-secret-not-used-anywhere-else-32
+      CORS_ORIGINS: http://localhost:5173
+      # The API and the browser both run on this machine; uploads go to a
+      # directory that dies with the runner.
+      STORAGE_DRIVER: local
+      LOG_LEVEL: warn
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            client/package-lock.json
+
+      - name: Install
+        run: |
+          npm ci
+          npm --prefix server ci
+          npm --prefix client ci
+
+      - name: Apply migrations
+        run: npm --prefix server run migrate:deploy
+
+      # Only the browser the suite actually drives - the config pins chromium.
+      - name: Install Playwright chromium
+        run: npx playwright install --with-deps chromium
+
+      # playwright.config.js starts the API and the Vite dev server itself and
+      # waits on /api/health, so there is nothing to launch here.
+      - name: Run end-to-end suite
+        run: npm run test:e2e
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
