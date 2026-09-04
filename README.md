@@ -125,12 +125,77 @@ npm run dev                 # http://localhost:5173
 
 ## Deploying
 
-The app is deploy-agnostic. There is a `Dockerfile` for each half and a
-`docker-compose.yml` that runs the whole stack:
+Two shapes, and the first is the one to reach for.
+
+### One service (recommended)
+
+The root `Dockerfile` builds the client and the API into a single image. That
+process serves both, from one origin, which removes three things that otherwise
+have to be got right and each of which fails as a blank page: `CORS_ORIGINS`
+does not need to name the web app, `VITE_API_BASE_URL` is not baked into the
+bundle (so the same image runs on localhost, a preview URL and the real domain),
+and there is one service to deploy rather than two.
+
+```bash
+docker build -t quickcheckin .
+docker run -p 4000:4000 --env-file server/.env quickcheckin
+```
+
+It runs `prisma migrate deploy` before accepting traffic, serves the app at `/`
+and the API under `/api/`, and answers health checks at `/api/health`
+(liveness — never touches the database) and `/api/ready` (readiness — does).
+
+On a platform that builds from a Dockerfile (Render, Railway, Fly, or a VPS),
+point it at this file and set the environment below. Nothing else is needed.
+
+### Two services
+
+`docker-compose.yml` runs the API, a Postgres, and the client behind nginx:
 
 ```bash
 docker compose up --build     # API on :4000, web on :8080
 ```
+
+Use this when the client is served by a CDN or a separate static host. Here
+`CORS_ORIGINS` **must** name the web origin, and `VITE_API_BASE_URL` is a build
+argument, because Vite inlines it at build time.
+
+### Deploy checklist
+
+Set these, whichever shape you chose:
+
+| Variable | Value |
+| --- | --- |
+| `NODE_ENV` | `production` |
+| `DATABASE_URL` | your Postgres connection string |
+| `JWT_SECRET` | 32+ characters, `openssl rand -base64 48` |
+| `TRUST_PROXY_HOPS` | `1` behind a platform router or a single nginx |
+| `STORAGE_DRIVER` | see the table below — this is the decision not to skip |
+| `CORS_ORIGINS` | only needed for the two-service shape |
+| `CLIENT_DIST_DIR` | set by the root image already; leave it alone |
+
+Then seed the first staff login, once, with `SEED_STAFF_PASSWORD` set in the
+environment:
+
+```bash
+npm --prefix server run seed
+```
+
+Config is validated at boot, so a short `JWT_SECRET`, a wildcard `CORS_ORIGINS`
+in production, or `STORAGE_DRIVER=s3` without a bucket stops the process with a
+readable message instead of failing later under load.
+
+Afterwards, three checks worth doing before you trust it:
+
+```bash
+curl -s https://your-host/api/health            # {"ok":true,...}
+curl -s https://your-host/api/ready             # {"ok":true,"database":"up"}
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H 'Origin: https://evil.example' https://your-host/api/health   # 403
+```
+
+Then open `/register` in a browser, submit one guest, and approve it from
+`/login` — the whole path, on the real host, before anyone else uses it.
 
 **The one decision you cannot skip is where ID images live.**
 
@@ -270,3 +335,9 @@ Worth saying plainly before this goes in front of guests:
    a `date` column.
 4. **No audit log of staff edits.** You can see who last reviewed a registration
    and when, but not the history of what they changed.
+5. **A WebP upload is stored and reviewable, but never auto-fills.** Neither
+   decoder reads WebP - ZXing decodes images with stb_image, and Jimp ships
+   JPEG, PNG, BMP, GIF and TIFF only. Phone cameras produce JPEG, so this is
+   rare in practice, and the guest simply fills the form in. Dropping WebP from
+   the accepted types would be worse: the photo is still useful to the front
+   desk even when nothing can be read from it.
