@@ -9,6 +9,9 @@ datasource db {
 
 enum IdType {
   AADHAAR
+  // PAN is one of the commonest IDs presented at an Indian front desk. Without
+  // it, a guest holding one has to file themselves under OTHER.
+  PAN
   PASSPORT
   DRIVING_LICENSE
   VOTER_ID

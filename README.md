@@ -18,8 +18,24 @@ Two QR formats are supported:
 - **Secure QR** (cards issued 2018 onwards): gzip-compressed, `0xFF`-delimited fields
 - **Legacy XML QR** (older cards): `<PrintLetterBarcodeData .../>`
 
-If the QR can't be read (old card, blurry photo, non-Aadhaar ID), the guest
-simply fills the form in by hand — nothing breaks.
+Reading the symbol is the hard part. A secure QR runs to about 1.5KB once the
+card's photo blob is included, which puts it at roughly 137 modules across — so
+on a photo of a whole card there are only three or four pixels per module to
+work with, and holding the card at an angle eats what is left. Two decoders run
+in order: ZXing (WebAssembly), which does perspective correction and answers in
+around 100ms, then a jsQR sweep over enhanced variants as a fallback if the wasm
+module is unavailable or declines the image.
+
+To check the decoder against real cards before launch, without storing anything:
+
+```bash
+cd server
+npm run scan:check -- path/to/card.jpg     # or a whole directory of them
+```
+
+It prints exactly what would have been auto-filled, and the masked ID number
+rather than the full one. If the QR can't be read (old card, blurry photo,
+non-Aadhaar ID), the guest simply fills the form in by hand — nothing breaks.
 
 ## How personal data is handled
 
@@ -27,7 +43,7 @@ This is the part that matters most, because the app holds Indian ID data.
 
 | | |
 | --- | --- |
-| **Aadhaar numbers** | Stored masked to the last 4 digits (`XXXX XXXX 1234`). The full number is never written to the database or returned to a browser. Private entities in India generally may not store full Aadhaar numbers, and the secure QR only exposes the last 4 anyway. |
+| **Aadhaar numbers** | Stored masked to the last 4 digits (`XXXX XXXX 1234`). The full number is never written to the database or returned to a browser — masking happens on the server for every path a number arrives by: read from the card's QR, typed into the guest form, or corrected later by staff. Private entities in India generally may not store full Aadhaar numbers, and the secure QR only exposes the last 4 anyway. |
 | **ID photos** | Never served from a public path. There is no static `/uploads` route. The image is streamed through `GET /api/registrations/:id/document`, which requires a staff token. |
 | **Deletion** | The photo is **permanently deleted** the moment a reviewer approves, checks in, or rejects the registration. Only `idDocumentDeletedAt` remains, so an audit can see that an image existed and was disposed of. |
 | **Abandoned uploads** | A guest who uploads a photo and then closes the tab leaves an image referenced by nothing. A sweeper deletes unreferenced objects older than `ORPHAN_UPLOAD_TTL_MINUTES` (default 2 hours). |
@@ -44,9 +60,13 @@ This is the part that matters most, because the app holds Indian ID data.
   every token issued before it — see [Ending a staff session](#ending-a-staff-session).
 - **CORS** — locked to the origins in `CORS_ORIGINS`. A wildcard is *refused* at
   boot in production.
-- **Rate limiting** — separate budgets for form submission, image scanning and
-  login. The scan endpoint is the most expensive thing the server does and gets
-  the tightest limit.
+- **Rate limiting** — separate budgets for form submission, image scanning,
+  login, and signed-in staff. The two public budgets are per-IP and sized for a
+  whole property's arrivals rather than one guest, because everyone on the hotel
+  wifi shares an address. The staff budget is counted per account instead, so
+  one busy reviewer cannot lock out the rest of the front desk. Login is the one
+  deliberately tight limit: it exists to slow password guessing, and a
+  successful sign-in does not count against it.
 - **Uploads** — 8MB cap, and the file's real magic bytes are checked; a renamed
   `.pdf` or script claiming `image/png` is rejected.
 - **Decoding limits** — images are downscaled before decoding and gzip payloads

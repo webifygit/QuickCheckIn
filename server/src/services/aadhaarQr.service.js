@@ -1,64 +1,18 @@
 const zlib = require('zlib');
-const Jimp = require('jimp');
-const jsQR = require('jsqr');
 
-// Aadhaar cards carry a QR code with the holder's demographic details.
+// Turns the text read off a card's QR into the fields the form needs. Getting
+// that text off the photo is qrDecoder.service's job; this file assumes it.
+//
 // Two formats exist in the wild:
 //   - Secure QR (2018+): a huge decimal integer -> bytes -> gzip -> 0xFF-delimited fields
 //   - Legacy QR (pre-2018): a plain XML string (<PrintLetterBarcodeData .../>)
-// Decoding happens entirely on our server, so the ID image is never sent anywhere.
-
-// A modern phone camera produces 12MP+ images, and the decoder allocates four
-// bytes per pixel per variant. Without a ceiling, one upload can exhaust memory
-// well before the 8MB file-size limit is reached (compression hides the cost).
-const MAX_SOURCE_PIXELS = 4_000_000; // ~2300x1730
-const MAX_VARIANT_PIXELS = 8_000_000;
+// Both are parsed here on our own server, so the ID image is never sent anywhere.
 
 // The secure QR is a big integer, but a crafted QR could hold an arbitrarily
 // long digit string, and BigInt parsing is superlinear. Real payloads sit well
-// under 2000 digits.
+// under 5000 digits.
 const MAX_SECURE_QR_DIGITS = 8000;
 const MAX_DECOMPRESSED_BYTES = 4 * 1024 * 1024;
-
-async function decodeQrFromImage(input) {
-  let image = await Jimp.read(input);
-
-  // Downscale oversized photos once, up front, so every later variant works
-  // from a bounded buffer.
-  const sourcePixels = image.bitmap.width * image.bitmap.height;
-  if (sourcePixels > MAX_SOURCE_PIXELS) {
-    image = image.scale(Math.sqrt(MAX_SOURCE_PIXELS / sourcePixels));
-  }
-
-  // Aadhaar's secure QR is dense, so a single pass on a phone photo often fails.
-  // Try progressively cleaned-up variants until one decodes.
-  const variants = [
-    (img) => img,
-    (img) => img.clone().greyscale().contrast(0.3),
-    (img) => img.clone().greyscale().normalize(),
-    (img) => img.clone().greyscale().contrast(0.5).scale(2),
-    (img) => img.clone().greyscale().scale(0.5),
-  ];
-
-  for (const makeVariant of variants) {
-    let candidate;
-    try {
-      candidate = makeVariant(image);
-    } catch (err) {
-      continue;
-    }
-
-    const { data, width, height } = candidate.bitmap;
-    if (width * height > MAX_VARIANT_PIXELS) continue;
-
-    const result = jsQR(new Uint8ClampedArray(data), width, height);
-    if (result && result.data) {
-      return result.data;
-    }
-  }
-
-  return null;
-}
 
 function bigIntStringToBuffer(value) {
   let hex = BigInt(value).toString(16);
@@ -177,4 +131,4 @@ function parseAadhaarQr(qrString) {
   };
 }
 
-module.exports = { decodeQrFromImage, parseAadhaarQr, parseSecureQr, parseLegacyXmlQr };
+module.exports = { parseAadhaarQr, parseSecureQr, parseLegacyXmlQr };

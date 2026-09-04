@@ -47,7 +47,7 @@ test.describe('Aadhaar auto-fill', () => {
       ),
     });
 
-    await expect(page.getByText(/fill the form in yourself/i)).toBeVisible();
+    await expect(page.getByText(/fill in the details below/i)).toBeVisible();
     await page.getByLabel(label.fullName).fill('Hand Filled Guest');
     await page.getByLabel(label.phone).fill('9876500012');
     await page.getByLabel(label.purpose).fill(marker('fallback'));

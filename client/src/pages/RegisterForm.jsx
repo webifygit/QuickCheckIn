@@ -343,6 +343,7 @@ export default function RegisterForm() {
                 onChange={(e) => updateField('idType', e.target.value)}
               >
                 <option value="AADHAAR">Aadhaar</option>
+                <option value="PAN">PAN card</option>
                 <option value="PASSPORT">Passport</option>
                 <option value="DRIVING_LICENSE">Driving License</option>
                 <option value="VOTER_ID">Voter ID</option>

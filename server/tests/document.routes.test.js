@@ -24,7 +24,6 @@ beforeAll(async () => {
 
 afterAll(() => {
   fs.rmSync(fixtureDir, { recursive: true, force: true });
-  fs.rmSync(process.env.UPLOAD_DIR, { recursive: true, force: true });
 });
 
 describe('POST /api/document/scan', () => {
@@ -78,7 +77,11 @@ describe('POST /api/document/scan', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.fields).toBeNull();
-    expect(res.body.message).toMatch(/fill the form in yourself/i);
+    expect(res.body.message).toMatch(/fill in the details below/i);
+    // A guest who uploaded a PAN card, a licence or a passport is not holding a
+    // bad photo, and telling them to retake it sends them in circles. The
+    // message has to name the real reason.
+    expect(res.body.message).toMatch(/only aadhaar cards/i);
     // The upload is still kept, so the guest does not have to re-photograph it.
     expect(res.body.documentKey).toMatch(/\.png$/);
   }, 30000);
@@ -90,7 +93,7 @@ describe('POST /api/document/scan', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.fields).toBeNull();
-    expect(res.body.message).toMatch(/fill the form in yourself/i);
+    expect(res.body.message).toMatch(/fill in the details below/i);
   }, 30000);
 
   it('falls back to manual entry when the payload looks secure but is corrupt', async () => {
@@ -102,7 +105,7 @@ describe('POST /api/document/scan', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.fields).toBeNull();
-    expect(res.body.message).toMatch(/fill the form in yourself/i);
+    expect(res.body.message).toMatch(/fill in the details below/i);
   }, 30000);
 
   it('refuses a non-image upload', async () => {

@@ -32,6 +32,9 @@ COPY --from=prisma /app/node_modules/@prisma ./node_modules/@prisma
 COPY package.json ./
 COPY prisma ./prisma
 COPY src ./src
+# `npm run staff -- disable <email>` is how an account is shut off in a hurry.
+# It has to be present in the image, or that only works on a developer's laptop.
+COPY scripts ./scripts
 
 # The local storage driver writes here. On a platform with an ephemeral disk,
 # mount a volume or switch to STORAGE_DRIVER=s3 - otherwise every deploy

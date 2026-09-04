@@ -1,5 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import fs from 'node:fs';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import jwt from 'jsonwebtoken';
 import request from 'supertest';
 import { createRequire } from 'node:module';
@@ -24,10 +23,6 @@ beforeEach(() => {
   prisma.registration.findMany.mockResolvedValue([]);
   prisma.registration.count.mockResolvedValue(0);
   prisma.registration.findUnique.mockResolvedValue({ id: 'reg_1', fullName: 'Asha Kulkarni' });
-});
-
-afterAll(() => {
-  fs.rmSync(process.env.UPLOAD_DIR, { recursive: true, force: true });
 });
 
 describe('ID images are never exposed publicly', () => {

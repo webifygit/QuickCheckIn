@@ -1,10 +1,11 @@
 const { z } = require('zod');
+const { looksLikeAadhaar, maskAadhaarNumber, AADHAAR_DIGIT_COUNT } = require('./idNumber');
 
 // Every field a guest or staff member can send is described here. Anything not
 // named is dropped before it reaches Prisma, which is what keeps a guest from
 // setting their own `status`, `id` or `reviewedByStaffId`.
 
-const ID_TYPES = ['AADHAAR', 'PASSPORT', 'DRIVING_LICENSE', 'VOTER_ID', 'OTHER'];
+const ID_TYPES = ['AADHAAR', 'PAN', 'PASSPORT', 'DRIVING_LICENSE', 'VOTER_ID', 'OTHER'];
 const STATUSES = ['PENDING', 'APPROVED', 'CHECKED_IN', 'REJECTED'];
 const GENDERS = ['MALE', 'FEMALE', 'TRANSGENDER'];
 
@@ -101,18 +102,75 @@ function checkDateOrder(data, ctx, existing = {}) {
   }
 }
 
+// idType is NOT NULL with an AADHAAR default, so an absent value means Aadhaar
+// here exactly as it does in the database. On an update the field may not be in
+// the payload at all, in which case what the record already holds decides.
+function effectiveIdType(data, existing = {}) {
+  return data.idType || existing.idType || 'AADHAAR';
+}
+
+// An Aadhaar number is checked before it is masked, so a mistyped one comes back
+// as a field error the guest can fix rather than being silently truncated to
+// four digits that belong to no card.
+function checkAadhaarNumber(data, ctx, existing = {}) {
+  if (effectiveIdType(data, existing) !== 'AADHAAR') return;
+
+  // Relabelling an existing record as Aadhaar without restating the number: the
+  // stored value was some other kind of ID, and masking it in place would throw
+  // away digits nobody can get back. Ask for the number instead.
+  if (data.idNumber === undefined) {
+    if (data.idType !== 'AADHAAR') return;
+    if (!existing.idNumber || looksLikeAadhaar(existing.idNumber)) return;
+  } else if (data.idNumber === null || data.idNumber === '') {
+    return;
+  } else if (looksLikeAadhaar(data.idNumber)) {
+    return;
+  }
+
+  ctx.addIssue({
+    code: 'custom',
+    path: ['idNumber'],
+    message: `Enter the ${AADHAAR_DIGIT_COUNT}-digit number printed on the Aadhaar card`,
+  });
+}
+
+// The masking itself. Applied as a transform so that every caller of these
+// schemas gets the masked value - there is no route by which a full number can
+// reach Prisma, whether it came from the guest form, a staff correction or a
+// future endpoint nobody has written yet.
+function maskAadhaarField(data, existing = {}) {
+  if (typeof data.idNumber !== 'string') return data;
+  if (effectiveIdType(data, existing) !== 'AADHAAR') return data;
+  return { ...data, idNumber: maskAadhaarNumber(data.idNumber) };
+}
+
 const createRegistrationSchema = z
   .object({
     ...baseFields,
     consentGiven: z.literal(true, { message: 'Guest consent is required to submit this form' }),
   })
-  .superRefine((data, ctx) => checkDateOrder(data, ctx));
+  .superRefine((data, ctx) => {
+    checkDateOrder(data, ctx);
+    checkAadhaarNumber(data, ctx);
+  })
+  .transform((data) => maskAadhaarField(data));
 
-// Staff may additionally move a registration through the review flow. Every
-// other field stays editable so they can correct a mis-scanned detail.
+// Staff may additionally move a registration through the review flow, and every
+// field a guest filled in stays editable so a mis-scanned detail can be
+// corrected - with two exceptions, which are dropped from baseFields here:
+//
+//   idDocumentKey - a staff PATCH could otherwise re-point a record at another
+//     guest's stored image, or resurrect one the review flow had just purged.
+//     The key is set once, by the scan endpoint that minted it.
+//   consentGiven  - a record of something the guest did. Staff correcting a
+//     mis-scanned address must not be able to rewrite it.
+const STAFF_IMMUTABLE_FIELDS = ['idDocumentKey', 'consentGiven'];
+
 function buildUpdateSchema(existing = {}) {
   const optionalBase = Object.fromEntries(
-    Object.entries(baseFields).map(([key, schema]) => [key, schema.optional()])
+    Object.entries(baseFields)
+      .filter(([key]) => !STAFF_IMMUTABLE_FIELDS.includes(key))
+      .map(([key, schema]) => [key, schema.optional()])
   );
 
   return z
@@ -121,9 +179,12 @@ function buildUpdateSchema(existing = {}) {
       fullName: z.string().trim().min(1, 'Full name is required').max(120).optional(),
       phone: phoneSchema.optional(),
       status: z.enum(STATUSES, { message: 'Unknown status' }).optional(),
-      consentGiven: z.boolean().optional(),
     })
-    .superRefine((data, ctx) => checkDateOrder(data, ctx, existing));
+    .superRefine((data, ctx) => {
+      checkDateOrder(data, ctx, existing);
+      checkAadhaarNumber(data, ctx, existing);
+    })
+    .transform((data) => maskAadhaarField(data, existing));
 }
 
 const loginSchema = z.object({
@@ -170,4 +231,5 @@ module.exports = {
   ID_TYPES,
   GENDERS,
   STORAGE_KEY_RE,
+  STAFF_IMMUTABLE_FIELDS,
 };

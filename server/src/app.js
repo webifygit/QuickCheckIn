@@ -6,7 +6,6 @@ require('express-async-errors');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
 const pinoHttp = require('pino-http');
 const crypto = require('crypto');
 
@@ -16,6 +15,7 @@ const prisma = require('./prismaClient');
 const authRoutes = require('./routes/auth.routes');
 const documentRoutes = require('./routes/document.routes');
 const registrationsRoutes = require('./routes/registrations.routes');
+const { loginLimiter, scanLimiter } = require('./middleware/rateLimit.middleware');
 
 const app = express();
 
@@ -73,42 +73,13 @@ if (!config.isTest) {
   );
 }
 
-const windowMs = config.RATE_LIMIT_WINDOW_MINUTES * 60 * 1000;
-
-const limiterOptions = {
-  windowMs,
-  standardHeaders: true,
-  legacyHeaders: false,
-  // Rate limits exist to protect the service, not to police the test suite.
-  skip: () => config.isTest,
-};
-
-// The guest form is public by design - anyone with the link can post to it - so
-// these two endpoints are the ones actually exposed to the internet.
-const submitLimiter = rateLimit({
-  ...limiterOptions,
-  max: config.RATE_LIMIT_PUBLIC_MAX,
-  message: { error: 'Too many submissions from this network. Please try again shortly.' },
-});
-
-// Scanning decodes an image, which is by far the most expensive thing the
-// server does. It gets a tighter budget than plain form submission.
-const scanLimiter = rateLimit({
-  ...limiterOptions,
-  max: config.RATE_LIMIT_SCAN_MAX,
-  message: { error: 'Too many uploads from this network. Please try again shortly.' },
-});
-
-const loginLimiter = rateLimit({
-  ...limiterOptions,
-  max: config.RATE_LIMIT_LOGIN_MAX,
-  skipSuccessfulRequests: true,
-  message: { error: 'Too many sign-in attempts. Please wait and try again.' },
-});
-
 app.use('/api/auth', loginLimiter, authRoutes);
 app.use('/api/document', scanLimiter, documentRoutes);
-app.use('/api/registrations', submitLimiter, registrationsRoutes);
+// Deliberately no limiter here: the public POST and the staff routes inside
+// this router have different callers and different budgets, so each one carries
+// its own. A single limiter at the mount point would put a busy front desk on
+// the guest form's quota - and behind one NAT address, the whole hotel shares it.
+app.use('/api/registrations', registrationsRoutes);
 
 // Liveness: is the process up. Deliberately does not touch the database, so a
 // database blip does not cause the orchestrator to kill a healthy container.

@@ -1,8 +1,25 @@
 import zlib from 'node:zlib';
+import crypto from 'node:crypto';
+
+// A real card's photo blob is incompressible, and its size is what pushes the
+// symbol to ~137 modules - the thing that makes decoding hard. Derived from a
+// hash chain rather than randomness so a fixture is byte-identical run to run.
+function incompressibleBytes(length) {
+  const parts = [];
+  let seed = crypto.createHash('sha256').update('aadhaar-fixture').digest();
+  while (parts.reduce((total, part) => total + part.length, 0) < length) {
+    parts.push(seed);
+    seed = crypto.createHash('sha256').update(seed).digest();
+  }
+  return Buffer.concat(parts).subarray(0, length);
+}
 
 // Builds a synthetic Aadhaar "secure QR" payload in the same shape real cards use:
 // text fields delimited by byte 0xFF, gzipped, then encoded as one huge decimal integer.
-export function buildSecureQr(fields, { version = 'V2', emailMobileIndicator = '3' } = {}) {
+export function buildSecureQr(
+  fields,
+  { version = 'V2', emailMobileIndicator = '3', photoBytes = 5 } = {}
+) {
   const ordered = [
     fields.referenceId, fields.name, fields.dob, fields.gender, fields.careOf,
     fields.district, fields.landmark, fields.house, fields.location, fields.pincode,
@@ -15,8 +32,8 @@ export function buildSecureQr(fields, { version = 'V2', emailMobileIndicator = '
     chunks.push(Buffer.from(token, 'utf8'), Buffer.from([0xff]));
   }
   // Real cards append a photo/signature blob past the text fields; the parser
-  // must ignore it, so include one.
-  chunks.push(Buffer.from([0x01, 0x02, 0x03, 0x04, 0x05]));
+  // must ignore it, so include one. Pass photoBytes to make it life-sized.
+  chunks.push(photoBytes === 5 ? Buffer.from([0x01, 0x02, 0x03, 0x04, 0x05]) : incompressibleBytes(photoBytes));
 
   const compressed = zlib.gzipSync(Buffer.concat(chunks));
   return BigInt(`0x${compressed.toString('hex')}`).toString(10);

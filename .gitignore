@@ -5,7 +5,6 @@ server/uploads/*
 server/gcp-vision-key.json
 dist/
 .DS_Store
-server/tests/.tmp-uploads/
 test-results/
 playwright-report/
 blob-report/

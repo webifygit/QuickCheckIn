@@ -4,9 +4,14 @@ const app = require('./app');
 const prisma = require('./prismaClient');
 const { storage } = require('./lib/storage');
 const { startOrphanSweeper } = require('./lib/orphanSweeper');
+const { initQrDecoder } = require('./services/qrDecoder.service');
 
 async function start() {
   await storage.init();
+
+  // Compiling the QR decoder's wasm module takes a moment. Doing it here means
+  // the first guest to upload a card does not wait for it.
+  await initQrDecoder();
 
   const server = app.listen(config.PORT, () => {
     logger.info(

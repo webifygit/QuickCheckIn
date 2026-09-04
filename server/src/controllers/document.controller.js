@@ -1,13 +1,19 @@
-const { decodeQrFromImage, parseAadhaarQr } = require('../services/aadhaarQr.service');
+const { parseAadhaarQr } = require('../services/aadhaarQr.service');
+const { decodeQrFromImage } = require('../services/qrDecoder.service');
 const { detectImageMime } = require('../middleware/upload.middleware');
 const { storage } = require('../lib/storage');
 const logger = require('../lib/logger');
 
-const CANNOT_READ_MESSAGE =
-  "Couldn't read the QR code on this image. Make sure the whole card is visible, well lit, and in focus — or just fill the form in yourself.";
+// Only an Aadhaar card can auto-fill: the details come out of the QR code
+// printed on it, and no other Indian ID carries one in that format. A guest who
+// uploads a PAN card, a licence or a passport has done nothing wrong, so these
+// messages say what actually happened instead of blaming the photo - the old
+// wording sent people off to retake a picture that was never the problem.
+const NO_QR_MESSAGE =
+  "We couldn't find an Aadhaar QR code on this image. Only Aadhaar cards fill the form in automatically — if this is a PAN card, passport, licence or voter ID, your photo has been saved for the front desk and you can fill in the details below. If it is an Aadhaar card, try again with the whole card in frame, well lit and in focus.";
 
 const NOT_AADHAAR_MESSAGE =
-  "We found a QR code but couldn't read Aadhaar details from it. Please fill the form in yourself.";
+  "We found a QR code, but not an Aadhaar one, so there was nothing to fill in from it. Your photo has been saved for the front desk — please fill in the details below.";
 
 // A failed scan is never an error condition. The guest can always type their
 // details in, so every path below returns 200 with whatever we managed to read.
@@ -35,7 +41,7 @@ async function scan(req, res) {
   }
 
   if (!qrString) {
-    return res.json({ documentKey, fields: null, message: CANNOT_READ_MESSAGE });
+    return res.json({ documentKey, fields: null, message: NO_QR_MESSAGE });
   }
 
   let fields = null;

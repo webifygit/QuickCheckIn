@@ -11,10 +11,8 @@
 
 const path = require('path');
 const fs = require('fs');
-const {
-  decodeQrFromImage,
-  parseAadhaarQr,
-} = require('../src/services/aadhaarQr.service');
+const { parseAadhaarQr } = require('../src/services/aadhaarQr.service');
+const { decodeQrFromImage } = require('../src/services/qrDecoder.service');
 
 const REQUIRED_FOR_AUTOFILL = ['fullName'];
 const REPORTED_FIELDS = ['fullName', 'dob', 'gender', 'idNumber', 'address'];

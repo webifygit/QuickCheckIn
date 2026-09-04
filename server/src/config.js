@@ -41,9 +41,25 @@ const schema = z
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 
     RATE_LIMIT_WINDOW_MINUTES: z.coerce.number().int().positive().default(15),
-    RATE_LIMIT_PUBLIC_MAX: z.coerce.number().int().positive().default(30),
-    RATE_LIMIT_SCAN_MAX: z.coerce.number().int().positive().default(15),
+
+    // Both public budgets are per-IP, and guests fill the form on the hotel's
+    // wifi - so one budget covers everyone checking in at once, not one guest.
+    // At the old 30 and 15 an afternoon's arrivals would lock each other out.
+    //
+    // The scan budget could afford to be tight when a decode cost a second or
+    // more of CPU. It now costs about a tenth of that (see qrDecoder.service),
+    // so 120 scans per window is less work than the old 15 ever was.
+    RATE_LIMIT_PUBLIC_MAX: z.coerce.number().int().positive().default(120),
+    RATE_LIMIT_SCAN_MAX: z.coerce.number().int().positive().default(120),
+
+    // Deliberately not raised. This one is a credential-guessing control, and
+    // a successful sign-in does not count against it, so real staff never meet it.
     RATE_LIMIT_LOGIN_MAX: z.coerce.number().int().positive().default(10),
+
+    // Signed-in staff, counted per account rather than per IP. A reviewer opens
+    // a registration, loads its ID image and saves it - three calls per guest -
+    // so this needs headroom a public budget does not.
+    RATE_LIMIT_STAFF_MAX: z.coerce.number().int().positive().default(600),
 
     // Trust N proxy hops for client IPs. Rate limiting is only as honest as
     // this value: too high and any client can spoof its own address.
