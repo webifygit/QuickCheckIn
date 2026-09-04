@@ -2,12 +2,24 @@ const config = require('./config');
 const logger = require('./lib/logger');
 const app = require('./app');
 const prisma = require('./prismaClient');
-const { storage } = require('./lib/storage');
+const { storage, UPLOAD_DIR } = require('./lib/storage');
 const { startOrphanSweeper } = require('./lib/orphanSweeper');
 const { initQrDecoder } = require('./services/qrDecoder.service');
 
 async function start() {
   await storage.init();
+
+  // Local storage on a platform with an ephemeral disk loses every ID image
+  // that has not yet been reviewed, on every deploy - silently, because nothing
+  // fails at the time. It is the right driver on a VPS with a mounted volume,
+  // so this cannot be an error, but it should never pass unremarked in
+  // production.
+  if (config.isProduction && storage.name === 'local') {
+    logger.warn(
+      { uploadDir: UPLOAD_DIR },
+      'STORAGE_DRIVER=local in production: ID images survive a restart only if this directory is a persistent volume. On Render, Railway, Fly or Heroku it is not - set STORAGE_DRIVER=s3'
+    );
+  }
 
   // Compiling the QR decoder's wasm module takes a moment. Doing it here means
   // the first guest to upload a card does not wait for it.
