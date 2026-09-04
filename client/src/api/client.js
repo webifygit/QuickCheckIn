@@ -1,6 +1,11 @@
 import axios from 'axios';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
+// An explicitly empty VITE_API_BASE_URL means "same origin": the API is being
+// served by the same process that served this page, so requests go to relative
+// paths and there is no CORS in the picture at all. `??` rather than `||` is
+// what makes that empty value survive - `||` would silently fall through to the
+// localhost default and break every request in production.
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000';
 
 const TOKEN_KEY = 'staffToken';
 const NAME_KEY = 'staffName';

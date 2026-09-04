@@ -8,6 +8,8 @@ const cors = require('cors');
 const helmet = require('helmet');
 const pinoHttp = require('pino-http');
 const crypto = require('crypto');
+const path = require('path');
+const fs = require('fs');
 
 const config = require('./config');
 const logger = require('./lib/logger');
@@ -25,9 +27,40 @@ const app = express();
 app.set('trust proxy', config.TRUST_PROXY_HOPS);
 app.disable('x-powered-by');
 
+// Set when this process is also serving the built client, which changes what
+// the security headers have to say: a policy written for a JSON API is wrong
+// for an HTML page, and vice versa.
+const clientDist = config.CLIENT_DIST_DIR ? path.resolve(config.CLIENT_DIST_DIR) : null;
+const servesClient = Boolean(clientDist && fs.existsSync(path.join(clientDist, 'index.html')));
+
 app.use(
   helmet({
-    contentSecurityPolicy: false, // The API serves JSON and images, not HTML.
+    // A page this process serves gets a real policy. Serving only JSON and
+    // images, there is no document for a CSP to protect, and helmet's default
+    // would just be noise on every response.
+    contentSecurityPolicy: servesClient
+      ? {
+          directives: {
+            defaultSrc: ["'self'"],
+            // The bundle is our own file; nothing is loaded from a CDN.
+            scriptSrc: ["'self'"],
+            // React sets style attributes on elements it renders, which counts
+            // as inline style. Scripts stay locked down, which is the half that
+            // matters.
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            // blob: is the guest's own photo, previewed before upload without
+            // it ever leaving the browser; data: covers inlined build assets.
+            imgSrc: ["'self'", 'data:', 'blob:'],
+            connectSrc: ["'self'"],
+            fontSrc: ["'self'", 'data:'],
+            objectSrc: ["'none'"],
+            baseUri: ["'self'"],
+            formAction: ["'self'"],
+            frameAncestors: ["'none'"],
+            upgradeInsecureRequests: config.isProduction ? [] : null,
+          },
+        }
+      : false,
     crossOriginResourcePolicy: { policy: 'same-site' },
   })
 );
@@ -35,16 +68,32 @@ app.use(
 // Only the origins named in CORS_ORIGINS may call this API. The default `cors()`
 // reflects any origin, which would let any site on the internet drive the
 // staff API using a signed-in reviewer's browser.
+//
+// The delegate form is used rather than a plain origin list so the request's own
+// origin can be worked out. When this process serves the client too, the page
+// and the API share an origin - but the browser still sends an Origin header for
+// the module script and stylesheet, because Vite marks them `crossorigin`. Judge
+// those against the host actually being addressed: an origin identical to the
+// one serving the page is not a cross-origin request in any meaningful sense,
+// and refusing it 403s the app's own JavaScript. That failure looks like a blank
+// page with no error anywhere near the cause.
 app.use(
-  cors({
-    origin(origin, callback) {
-      // Same-origin and non-browser callers (curl, health checks) send no Origin.
-      if (!origin) return callback(null, true);
-      if (config.corsOrigins.includes(origin)) return callback(null, true);
-      return callback(new Error(`Origin ${origin} is not allowed`));
-    },
-    credentials: true,
-    maxAge: 86400,
+  cors((req, callback) => {
+    const options = { credentials: true, maxAge: 86400 };
+    const origin = req.headers.origin;
+
+    // Non-browser callers - curl, health checks, server-to-server - send none.
+    if (!origin) return callback(null, { ...options, origin: true });
+
+    // req.protocol honours X-Forwarded-Proto only as far as TRUST_PROXY_HOPS
+    // allows, so this cannot be spoofed into matching by a client claiming https.
+    const selfOrigin = `${req.protocol}://${req.get('host')}`;
+
+    if (origin === selfOrigin || config.corsOrigins.includes(origin)) {
+      return callback(null, { ...options, origin: true });
+    }
+
+    return callback(new Error(`Origin ${origin} is not allowed`));
   })
 );
 
@@ -95,6 +144,37 @@ app.get('/api/ready', async (req, res) => {
     res.status(503).json({ ok: false, database: 'down' });
   }
 });
+
+// The built client, when this process is serving it. Registered after the API
+// routes so nothing here can shadow them, and before the JSON 404 so an unknown
+// page still reaches the app's router.
+if (servesClient) {
+  app.use(
+    express.static(clientDist, {
+      // Asset filenames carry a content hash, so a cached copy can never be
+      // stale. index.html has no hash and is handled below.
+      maxAge: '1y',
+      immutable: true,
+      index: false,
+    })
+  );
+
+  const indexHtml = path.join(clientDist, 'index.html');
+
+  app.get('*', (req, res, next) => {
+    // An unknown API path is a client error worth reporting as JSON. Handing it
+    // the HTML shell instead would turn a typo in a fetch into a parse error
+    // three layers away from the cause.
+    if (req.path.startsWith('/api/')) return next();
+
+    // Never cached: index.html names the hashed bundles, so a stale copy points
+    // at asset files that no longer exist.
+    res.set('Cache-Control', 'no-store');
+    res.sendFile(indexHtml, (err) => (err ? next(err) : undefined));
+  });
+
+  logger.info({ clientDist }, 'Serving the built client from this process');
+}
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Not found' });

@@ -40,6 +40,13 @@ const schema = z
 
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 
+    // Path to the client's built assets. When set, this process serves the app
+    // as well as the API, from one origin - which means no CORS to configure,
+    // no API URL baked into the bundle at build time, and one service to deploy
+    // instead of two. Leave it unset to serve the API alone behind nginx or a
+    // separate static host, which is what docker-compose.yml does.
+    CLIENT_DIST_DIR: z.string().optional(),
+
     RATE_LIMIT_WINDOW_MINUTES: z.coerce.number().int().positive().default(15),
 
     // Both public budgets are per-IP, and guests fill the form on the hotel's
