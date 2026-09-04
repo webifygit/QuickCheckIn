@@ -12,7 +12,7 @@
 const path = require('path');
 const fs = require('fs');
 const { parseAadhaarQr } = require('../src/services/aadhaarQr.service');
-const { decodeQrFromImage } = require('../src/services/qrDecoder.service');
+const { decodeQrWithDiagnostics } = require('../src/services/qrDecoder.service');
 
 const REQUIRED_FOR_AUTOFILL = ['fullName'];
 const REPORTED_FIELDS = ['fullName', 'dob', 'gender', 'idNumber', 'address'];
@@ -32,19 +32,36 @@ async function checkOne(file) {
 
   const startedAt = Date.now();
   let qrString;
+  let diagnostics = {};
   try {
-    qrString = await decodeQrFromImage(file);
+    ({ text: qrString, diagnostics } = await decodeQrWithDiagnostics(file));
   } catch (err) {
     console.log(`\n${label}\n  DECODE FAILED  ${err.message}`);
     return 'error';
   }
   const decodeMs = Date.now() - startedAt;
 
+  // Printed on failure, because "no QR found" on its own tells you nothing
+  // about whether to retake the photo or reach for a different card.
+  const shape = () => {
+    const source = diagnostics.source;
+    if (!source) return '';
+    const scaled = diagnostics.downscaledTo
+      ? `, decoded at ${diagnostics.downscaledTo.width}x${diagnostics.downscaledTo.height}`
+      : '';
+    return `  image: ${source.width}x${source.height} (${source.megapixels}MP)${scaled}`;
+  };
+
   if (!qrString) {
     console.log(`\n${label}`);
     console.log(`  NO QR FOUND        (${decodeMs}ms)`);
-    console.log('  The guest would fill the form in by hand.');
-    console.log('  Try: better lighting, whole card in frame, less blur, no glare.');
+    const shapeLine = shape();
+    if (shapeLine) console.log(shapeLine);
+    console.log('  Both decoders were tried. The guest would fill the form in by hand.');
+    console.log('  Only Aadhaar cards carry a QR this can read - a PAN card, licence');
+    console.log('  or passport will always land here.');
+    console.log('  If it is an Aadhaar card: whole card in frame, no glare on the QR,');
+    console.log('  steady hands. The symbol needs roughly a third of the frame.');
     return 'no-qr';
   }
 

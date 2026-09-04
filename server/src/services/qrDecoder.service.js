@@ -38,9 +38,15 @@ const MAX_SOURCE_PIXELS = 12_000_000;
 // upscale on a big source.
 const MAX_VARIANT_PIXELS = 17_000_000;
 
-// The jsQR sweep stops here whatever it has found. A guest is waiting on this
-// request, and past a few seconds they are better served by typing the form in.
-const JSQR_BUDGET_MS = 5_000;
+// The jsQR sweep stops here whatever it has found. This budget is spent in full
+// on every image that has no readable Aadhaar QR - which includes every PAN
+// card, licence and passport a guest uploads, so it is not a rare path. At five
+// seconds the guest watched a spinner for nearly seven before being told to
+// type the details in; ZXing has already had its say by then, and on every
+// image measured it read strictly more than the sweep did. Two and a half
+// seconds keeps the fallback for the case it exists for - the wasm module
+// failing to load - without charging every other guest for it.
+const JSQR_BUDGET_MS = 2_500;
 
 // The wasm binary is loaded from disk rather than fetched: zxing-wasm's default
 // loader expects a URL it can fetch, which is a browser assumption.
@@ -85,6 +91,20 @@ async function decodeWithZXing(buffer) {
 
   const results = await readBarcodesFromImageFile(new Blob([buffer]), READER_OPTIONS);
   return results.find((result) => result.text)?.text || null;
+}
+
+// What a failed read is worth knowing about. "It didn't work" is not something
+// anyone can act on; the size of the image and how far the symbol was from
+// being readable is. Roughly three pixels per module is the floor for any
+// decoder, and a real secure QR is about 137 modules across, so a card
+// occupying a third of the frame needs the numbers below to be comfortable.
+function describeImage(image) {
+  const { width, height } = image.bitmap;
+  return {
+    width,
+    height,
+    megapixels: Number(((width * height) / 1_000_000).toFixed(1)),
+  };
 }
 
 function scanBitmap(image) {
@@ -160,21 +180,28 @@ function jsqrPasses(grey) {
   return passes;
 }
 
-async function decodeWithJsQr(input) {
+async function decodeWithJsQr(input, diagnostics) {
   const deadline = Date.now() + JSQR_BUDGET_MS;
 
   let image = await Jimp.read(input);
 
+  if (diagnostics) diagnostics.source = describeImage(image);
+
   const sourcePixels = image.bitmap.width * image.bitmap.height;
   if (sourcePixels > MAX_SOURCE_PIXELS) {
     image = image.scale(Math.sqrt(MAX_SOURCE_PIXELS / sourcePixels));
+    if (diagnostics) diagnostics.downscaledTo = describeImage(image);
   }
 
   // Greyscale once, up front: every pass below works from this.
   const grey = image.greyscale();
 
+  let passesRun = 0;
   for (const makePass of jsqrPasses(grey)) {
-    if (Date.now() > deadline) break;
+    if (Date.now() > deadline) {
+      if (diagnostics) diagnostics.jsqrRanOutOfTime = true;
+      break;
+    }
 
     let candidate;
     try {
@@ -185,28 +212,57 @@ async function decodeWithJsQr(input) {
       continue;
     }
 
+    passesRun += 1;
     const decoded = scanBitmap(candidate);
-    if (decoded) return decoded;
+    if (decoded) {
+      if (diagnostics) diagnostics.jsqrPasses = passesRun;
+      return decoded;
+    }
   }
 
+  if (diagnostics) diagnostics.jsqrPasses = passesRun;
   return null;
 }
 
 // Accepts a Buffer (what the upload middleware holds) or a path (what
-// scripts/scan-check.js passes). Returns the QR's text, or null.
-async function decodeQrFromImage(input) {
+// scripts/scan-check.js passes). Returns the QR's text and a record of how the
+// attempt went - the latter is what turns "it didn't work" into something
+// anyone can act on, whether it is read from a log line or printed by
+// scripts/scan-check.js.
+async function decodeQrWithDiagnostics(input) {
+  const startedAt = Date.now();
   const buffer = Buffer.isBuffer(input) ? input : await fs.promises.readFile(input);
+  const diagnostics = { bytes: buffer.length, decoder: null };
 
   try {
+    const zxingStartedAt = Date.now();
     const decoded = await decodeWithZXing(buffer);
-    if (decoded) return decoded;
+    diagnostics.zxingMs = Date.now() - zxingStartedAt;
+    if (decoded) {
+      diagnostics.decoder = 'zxing';
+      diagnostics.totalMs = Date.now() - startedAt;
+      return { text: decoded, diagnostics };
+    }
   } catch (err) {
     // A decoder that cannot read this image must not fail the request: the
     // slower one may still manage, and failing that the guest types it in.
+    diagnostics.zxingError = err.message;
     logger.warn({ err: err.message }, 'ZXing decode failed, falling back to jsQR');
   }
 
-  return decodeWithJsQr(buffer);
+  const jsqrStartedAt = Date.now();
+  const decoded = await decodeWithJsQr(buffer, diagnostics);
+  diagnostics.jsqrMs = Date.now() - jsqrStartedAt;
+  diagnostics.totalMs = Date.now() - startedAt;
+  if (decoded) diagnostics.decoder = 'jsqr';
+
+  return { text: decoded, diagnostics };
+}
+
+// The plain form, for callers that only care whether it worked.
+async function decodeQrFromImage(input) {
+  const { text } = await decodeQrWithDiagnostics(input);
+  return text;
 }
 
 // Called at boot so the wasm module is compiled before the first guest arrives.
@@ -218,4 +274,4 @@ async function initQrDecoder() {
   return ready;
 }
 
-module.exports = { decodeQrFromImage, initQrDecoder };
+module.exports = { decodeQrFromImage, decodeQrWithDiagnostics, initQrDecoder };

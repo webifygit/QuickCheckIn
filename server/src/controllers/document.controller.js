@@ -1,5 +1,5 @@
 const { parseAadhaarQr } = require('../services/aadhaarQr.service');
-const { decodeQrFromImage } = require('../services/qrDecoder.service');
+const { decodeQrWithDiagnostics } = require('../services/qrDecoder.service');
 const { detectImageMime } = require('../middleware/upload.middleware');
 const { storage } = require('../lib/storage');
 const logger = require('../lib/logger');
@@ -32,8 +32,9 @@ async function scan(req, res) {
   const documentKey = await storage.save(req.file.buffer, detectedMime);
 
   let qrString = null;
+  let diagnostics = null;
   try {
-    qrString = await decodeQrFromImage(req.file.buffer);
+    ({ text: qrString, diagnostics } = await decodeQrWithDiagnostics(req.file.buffer));
   } catch (err) {
     // Corrupt or hostile image data. The upload is still kept - staff can look
     // at the photo even when the QR is unreadable.
@@ -41,8 +42,15 @@ async function scan(req, res) {
   }
 
   if (!qrString) {
+    // The photo itself is the guest's ID and is not something to log, but its
+    // shape is exactly what is needed to tell "this is not an Aadhaar card"
+    // apart from "the symbol was too small to resolve" - and without it, a
+    // report of "the scan didn't work" is unanswerable.
+    logger.info({ documentKey, ...(diagnostics || {}) }, 'No QR found in uploaded image');
     return res.json({ documentKey, fields: null, message: NO_QR_MESSAGE });
   }
+
+  logger.info({ documentKey, ...(diagnostics || {}) }, 'QR decoded from uploaded image');
 
   let fields = null;
   try {
