@@ -180,6 +180,23 @@ both are the platform's, not the app's:
 
 `STORAGE_DRIVER=s3` is required here, for the reason in the table below.
 
+### Running it for a demo, without deploying anything
+
+One command builds the client and runs the whole app as a single process, the
+same shape the container runs:
+
+```bash
+npm run demo        # http://localhost:4000 - app and API on one port
+```
+
+This is production mode: a real build, one origin, no Vite dev server and no
+CORS in the picture. Use it rather than `npm run dev` when showing the app to
+anyone, because it is what a deployment actually does - a bug that only appears
+in the built bundle appears here too.
+
+It occupies port 4000, so stop it before running `npm run test:e2e`, which
+starts its own servers on 4000 and 5173.
+
 ### Deploy checklist
 
 Set these, whichever shape you chose:

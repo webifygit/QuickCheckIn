@@ -16,7 +16,8 @@
     "migrate:deploy": "prisma migrate deploy",
     "start:migrate": "prisma migrate deploy && node src/index.js",
     "scan:check": "node scripts/scan-check.js",
-    "staff": "node scripts/staff-access.js"
+    "staff": "node scripts/staff-access.js",
+    "demo:serve": "NODE_ENV=production CLIENT_DIST_DIR=../client/dist node src/index.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1123.0",

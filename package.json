@@ -10,7 +10,9 @@
     "test:client": "npm --prefix client run test",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:all": "npm run test && npm run test:e2e"
+    "test:all": "npm run test && npm run test:e2e",
+    "demo:build": "VITE_API_BASE_URL= npm --prefix client run build",
+    "demo": "npm run demo:build && npm --prefix server run demo:serve"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1"
