@@ -90,6 +90,23 @@ const schema = z
       }
     }
 
+    // Serverless platforms give a function a read-only filesystem with one
+    // writable directory, /tmp, whose contents do not survive to the next
+    // invocation. The local driver would fail creating its upload directory at
+    // boot, which surfaces as every request 500ing with no obvious cause. Say
+    // so here instead, while the message can still name the fix.
+    if (env.STORAGE_DRIVER === 'local' && (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME)) {
+      const uploadDir = env.UPLOAD_DIR || '';
+      if (!uploadDir.startsWith('/tmp')) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['STORAGE_DRIVER'],
+          message:
+            'STORAGE_DRIVER=local cannot work on a serverless platform: the filesystem is read-only apart from /tmp, and /tmp is not shared between invocations. Set STORAGE_DRIVER=s3, or UPLOAD_DIR=/tmp/uploads for a throwaway demo where a guest\'s ID photo may be gone by the time staff open it.',
+        });
+      }
+    }
+
     if (env.NODE_ENV === 'production' && env.CORS_ORIGINS.trim() === '*') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
