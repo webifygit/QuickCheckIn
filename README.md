@@ -345,23 +345,41 @@ What the suites lock down:
 
 Worth saying plainly before this goes in front of guests:
 
-1. **No real Aadhaar card has been decoded by this code.** The test fixtures are
-   built from the same format assumptions the parser makes, so they prove the
-   parser is self-consistent — not that it matches what UIDAI actually prints.
-   The failure mode is graceful (the guest types their details in), but the
-   auto-fill hit rate is unmeasured.
+1. **Auto-fill depends on the quality of the printed QR, and some cards will not
+   read.** A genuine UIDAI secure QR has now been decoded end to end — 124ms,
+   first pass, fields extracted and the Aadhaar number masked before storage.
+   But the same card photographed as a whole card did *not* decode, and no
+   amount of processing rescued it.
 
-   **Measure it before launch** with the bundled diagnostic:
+   The reason is physical. An Aadhaar secure QR is roughly 137-177 modules
+   across. A photo of the whole card gives about four pixels per module, and on
+   a PVC card whose ink has bled, neighbouring modules merge at that scale.
+   Measured on a bench fixture, a symbol spanning 600px reads even with
+   simulated bleed and 400px does not; a real card that bleeds worse failed at
+   730px.
+
+   What works, in order:
+
+   - A **screenshot of the QR from the e-Aadhaar PDF** or the mAadhaar app. No
+     camera, no lighting, no ink — perfect module edges. This is the reliable
+     route and the one to tell guests about.
+   - A **close-up photo of the QR alone**, filling the frame, at full camera
+     resolution, no flash reflection across the code.
+   - A photo of the whole card. Works on well-printed cards, fails on worn ones.
+
+   Two traps worth knowing: sending the photo through a chat app first silently
+   shrinks it (a 3MP close-up arrived as 0.6MP), and flash on a laminated card
+   puts a specular highlight across the code that exceeds what its error
+   correction can recover.
+
+   Measure your own hit rate with the bundled diagnostic, which stores and
+   uploads nothing and never prints a full Aadhaar number:
 
    ```bash
    cd server
    npm run scan:check -- ~/cards/*.jpg
    ```
 
-   It prints, per card, whether the QR was found, which format it was, and
-   exactly which fields resolved — then a hit-rate summary. Nothing is uploaded
-   or stored, and full Aadhaar numbers are never printed. It exits non-zero only
-   if a 12-digit number ever survives masking, so it can also run in CI.
 2. **Revocation costs a database read per staff request.** Ending a session
    immediately means auth re-reads the account on every authenticated call — one
    primary-key lookup. Fine at front-desk traffic; if that ever becomes the
