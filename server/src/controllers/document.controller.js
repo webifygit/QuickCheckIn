@@ -1,5 +1,5 @@
 const { parseAadhaarQr } = require('../services/aadhaarQr.service');
-const { decodeQrWithDiagnostics } = require('../services/qrDecoder.service');
+const { decodeQrWithDiagnostics, describePhotoProblem } = require('../services/qrDecoder.service');
 const { detectImageMime } = require('../middleware/upload.middleware');
 const { storage } = require('../lib/storage');
 const logger = require('../lib/logger');
@@ -11,6 +11,11 @@ const logger = require('../lib/logger');
 // wording sent people off to retake a picture that was never the problem.
 const NO_QR_MESSAGE =
   "We couldn't find an Aadhaar QR code on this image. Only Aadhaar cards fill the form in automatically — if this is a PAN card, passport, licence or voter ID, your photo has been saved for the front desk and you can fill in the details below. If it is an Aadhaar card, try again with the whole card in frame, well lit and in focus.";
+
+// Used when the photo looks like the problem, after describePhotoProblem has
+// said which way. The guest is never stuck: the form below is always fillable.
+const RETRY_MESSAGE =
+  'Try again with the card flat, in good light, filling most of the frame — or just fill in the details below.';
 
 const NOT_AADHAAR_MESSAGE =
   "We found a QR code, but not an Aadhaar one, so there was nothing to fill in from it. Your photo has been saved for the front desk — please fill in the details below.";
@@ -47,7 +52,16 @@ async function scan(req, res) {
     // apart from "the symbol was too small to resolve" - and without it, a
     // report of "the scan didn't work" is unanswerable.
     logger.info({ documentKey, ...(diagnostics || {}) }, 'No QR found in uploaded image');
-    return res.json({ documentKey, fields: null, message: NO_QR_MESSAGE });
+
+    // When the photo itself is the likely problem, say so first. "Only Aadhaar
+    // cards auto-fill" is true but useless to someone holding an Aadhaar card
+    // that came out too dark to read.
+    const problem = describePhotoProblem(diagnostics);
+    return res.json({
+      documentKey,
+      fields: null,
+      message: problem ? `${problem} ${RETRY_MESSAGE}` : NO_QR_MESSAGE,
+    });
   }
 
   logger.info({ documentKey, ...(diagnostics || {}) }, 'QR decoded from uploaded image');

@@ -93,6 +93,62 @@ async function decodeWithZXing(buffer) {
   return results.find((result) => result.text)?.text || null;
 }
 
+// Sampled every fourth pixel in both directions - enough to characterise a photo
+// and cheap enough to run on an image that has already failed to decode.
+//
+// Two numbers, both measured against card photos that do decode:
+//
+//   brightness - a card fills the frame with a light document. One that decoded
+//     measured 167/255; a photo taken in poor light measured 76.
+//   detail - the share of adjacent pixels differing sharply, which is what both
+//     printed text and a QR's modules produce. A card photo that decoded
+//     measured 9.1% in its busiest region; an out-of-focus one measured 1.0%.
+//
+// Neither proves anything on its own. Together with "no QR was found" they are
+// the difference between telling a guest to find better light and letting them
+// photograph the same card six times.
+function measureQuality(grey) {
+  const { width, height, data } = grey.bitmap;
+  const luminance = (x, y) => data[(y * width + x) << 2];
+
+  let sum = 0;
+  let samples = 0;
+  for (let y = 0; y < height; y += 4) {
+    for (let x = 0; x < width; x += 4) {
+      sum += luminance(x, y);
+      samples += 1;
+    }
+  }
+
+  // Detail is measured per cell and the busiest one wins: a QR occupies a small
+  // part of the frame, so averaging over the whole image would bury it.
+  const CELLS = 12;
+  const cellWidth = Math.floor(width / CELLS);
+  const cellHeight = Math.floor(height / CELLS);
+  let busiest = 0;
+
+  if (cellWidth > 2 && cellHeight > 2) {
+    for (let row = 0; row < CELLS; row += 1) {
+      for (let column = 0; column < CELLS; column += 1) {
+        let edges = 0;
+        let counted = 0;
+        for (let y = row * cellHeight; y < (row + 1) * cellHeight - 1; y += 2) {
+          for (let x = column * cellWidth; x < (column + 1) * cellWidth - 1; x += 2) {
+            if (Math.abs(luminance(x, y) - luminance(x + 1, y)) > 60) edges += 1;
+            counted += 1;
+          }
+        }
+        if (counted) busiest = Math.max(busiest, edges / counted);
+      }
+    }
+  }
+
+  return {
+    brightness: samples ? Math.round(sum / samples) : null,
+    detail: Number((busiest * 100).toFixed(1)),
+  };
+}
+
 // What a failed read is worth knowing about. "It didn't work" is not something
 // anyone can act on; the size of the image and how far the symbol was from
 // being readable is. Roughly three pixels per module is the floor for any
@@ -196,6 +252,8 @@ async function decodeWithJsQr(input, diagnostics) {
   // Greyscale once, up front: every pass below works from this.
   const grey = image.greyscale();
 
+  if (diagnostics) diagnostics.quality = measureQuality(grey);
+
   let passesRun = 0;
   for (const makePass of jsqrPasses(grey)) {
     if (Date.now() > deadline) {
@@ -274,4 +332,33 @@ async function initQrDecoder() {
   return ready;
 }
 
-module.exports = { decodeQrFromImage, decodeQrWithDiagnostics, initQrDecoder };
+// Turns the measurements into the one thing worth saying to a guest, or null
+// when the photo looks fine and the card simply has no Aadhaar QR on it.
+// Conservative on purpose: telling someone their photo is bad when it is not
+// sends them round a loop they cannot get out of.
+function describePhotoProblem(diagnostics) {
+  const quality = diagnostics?.quality;
+  if (!quality) return null;
+
+  // Too small to judge. A thumbnail or a placeholder has no exposure or focus
+  // worth commenting on, and calling one "dark" is noise dressed as help.
+  const source = diagnostics.source;
+  if (!source || source.width < 200 || source.height < 200) return null;
+
+  if (quality.brightness !== null && quality.brightness < 110) {
+    return 'This photo came out quite dark, which is the usual reason a QR code cannot be read.';
+  }
+
+  if (quality.detail < 3.5) {
+    return 'This photo looks out of focus - none of the fine detail a QR code needs came through.';
+  }
+
+  return null;
+}
+
+module.exports = {
+  decodeQrFromImage,
+  decodeQrWithDiagnostics,
+  describePhotoProblem,
+  initQrDecoder,
+};

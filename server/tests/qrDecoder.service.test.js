@@ -96,3 +96,38 @@ describe('reading the QR off a card photo', () => {
     await expect(decodeQrFromImage(Buffer.from('not an image'))).rejects.toThrow();
   }, DECODE_TIMEOUT_MS);
 });
+
+describe('telling a guest what was wrong with the photo', () => {
+  const { describePhotoProblem } = require('../src/services/qrDecoder.service');
+
+  // The thresholds come from measured card photos: one that decoded scored 167
+  // brightness and 9.1% detail; the one that sent us down this path scored 76
+  // and 1.0%.
+  const photo = (quality) => ({ source: { width: 2000, height: 1500 }, quality });
+
+  it('names darkness when the photo is underexposed', () => {
+    expect(describePhotoProblem(photo({ brightness: 76, detail: 1 }))).toMatch(/dark/i);
+  });
+
+  it('names focus when the photo is bright but has no fine detail', () => {
+    expect(describePhotoProblem(photo({ brightness: 180, detail: 0.8 }))).toMatch(/focus/i);
+  });
+
+  // A thumbnail has no exposure or focus worth commenting on.
+  it('says nothing about an image too small to judge', () => {
+    expect(
+      describePhotoProblem({ source: { width: 1, height: 1 }, quality: { brightness: 0, detail: 0 } })
+    ).toBeNull();
+  });
+
+  // A well-taken photo of a PAN card or a licence has nothing wrong with it.
+  // Blaming the photo there sends the guest round a loop with no exit.
+  it('blames nothing when the photo is fine and the card simply has no Aadhaar QR', () => {
+    expect(describePhotoProblem(photo({ brightness: 167, detail: 9.1 }))).toBeNull();
+  });
+
+  it('says nothing when quality was never measured', () => {
+    expect(describePhotoProblem({})).toBeNull();
+    expect(describePhotoProblem(null)).toBeNull();
+  });
+});
