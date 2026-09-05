@@ -332,39 +332,27 @@ async function initQrDecoder() {
   return ready;
 }
 
-// Turns the measurements into the one thing worth saying to a guest, or null
-// when the photo looks fine and the card simply has no Aadhaar QR on it.
-// Conservative on purpose: telling someone their photo is bad when it is not
-// sends them round a loop they cannot get out of.
-function describePhotoProblem(diagnostics) {
-  const quality = diagnostics?.quality;
-  if (!quality) return null;
-
-  // Too small to judge. A thumbnail or a placeholder has no exposure or focus
-  // worth commenting on, and calling one "dark" is noise dressed as help.
-  const source = diagnostics.source;
-  if (!source || source.width < 200 || source.height < 200) return null;
-
-  if (quality.brightness !== null && quality.brightness < 110) {
-    return 'This photo came out quite dark, which is the usual reason a QR code cannot be read.';
-  }
-
-  // There was a low-detail branch here that told the guest their photo was out
-  // of focus. It was wrong on the first real Aadhaar card it met: the photo was
-  // sharp - crisp text, a clearly resolved symbol - and what actually defeated
-  // the decoders was the card's own printing. A version-40 Aadhaar QR is around
-  // 177 modules across, so a photo of the whole card gives roughly four pixels
-  // per module, and ink bleed on the printed card merged neighbouring modules
-  // into blobs at that scale. Nothing separates that from genuine camera blur
-  // by measuring the image, and telling someone their steady, well-lit photo is
-  // out of focus sends them round a loop they cannot get out of. The advice for
-  // both cases is the same and lives in the message itself: get closer.
-  return null;
-}
+// There was a describePhotoProblem() here that turned these measurements into a
+// diagnosis for the guest - "too dark", "out of focus". It was wrong both times
+// it met a real card.
+//
+// Out of focus: the photo was sharp; the card's own printing had merged the
+// modules of a ~177-module symbol at the four pixels per module a whole-card
+// photo affords.
+//
+// Too dark: mean brightness is meaningless on a close-up of a QR, which is half
+// black by design. Measured across four real uploads the means ran 76-139 while
+// the 90th percentile - the white modules - ran 177-222 on every single one.
+// Bright photos, low means, and the check fired on the ones it should not have.
+//
+// Both numbers stay in the diagnostics, because they are worth having in a log
+// when someone reports a failure. Neither is good enough to accuse a guest of
+// anything, and a wrong diagnosis is worse than none: it sends someone off to
+// fix a problem they do not have. The message now gives the advice that helps
+// whatever the cause - get the QR close, fill the frame, avoid glare.
 
 module.exports = {
   decodeQrFromImage,
   decodeQrWithDiagnostics,
-  describePhotoProblem,
   initQrDecoder,
 };

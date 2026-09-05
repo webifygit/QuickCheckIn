@@ -1,5 +1,5 @@
 const { parseAadhaarQr } = require('../services/aadhaarQr.service');
-const { decodeQrWithDiagnostics, describePhotoProblem } = require('../services/qrDecoder.service');
+const { decodeQrWithDiagnostics } = require('../services/qrDecoder.service');
 const { detectImageMime } = require('../middleware/upload.middleware');
 const { storage } = require('../lib/storage');
 const logger = require('../lib/logger');
@@ -10,12 +10,7 @@ const logger = require('../lib/logger');
 // messages say what actually happened instead of blaming the photo - the old
 // wording sent people off to retake a picture that was never the problem.
 const NO_QR_MESSAGE =
-  "We couldn't read an Aadhaar QR code on this image. If this is an Aadhaar card, take one more photo of just the QR code, close up and filling the frame — the code is a dense one and a photo of the whole card often does not have the detail to read it. If it is a PAN card, passport, licence or voter ID, your photo has been saved for the front desk and you can fill in the details below.";
-
-// Used when the photo looks like the problem, after describePhotoProblem has
-// said which way. The guest is never stuck: the form below is always fillable.
-const RETRY_MESSAGE =
-  'Try once more in better light, with just the QR code close up and filling the frame — or just fill in the details below.';
+  "We couldn't read an Aadhaar QR code on this image. Aadhaar's code is a dense one: photograph it on its own, close up enough to fill the frame, with no reflection across it — a picture of the whole card usually does not carry enough detail. Sending the photo through a chat app first shrinks it, so upload the original. If this is a PAN card, passport, licence or voter ID, your photo has been saved for the front desk and you can fill in the details below.";
 
 const NOT_AADHAAR_MESSAGE =
   "We found a QR code, but not an Aadhaar one, so there was nothing to fill in from it. Your photo has been saved for the front desk — please fill in the details below.";
@@ -53,15 +48,7 @@ async function scan(req, res) {
     // report of "the scan didn't work" is unanswerable.
     logger.info({ documentKey, ...(diagnostics || {}) }, 'No QR found in uploaded image');
 
-    // When the photo itself is the likely problem, say so first. "Only Aadhaar
-    // cards auto-fill" is true but useless to someone holding an Aadhaar card
-    // that came out too dark to read.
-    const problem = describePhotoProblem(diagnostics);
-    return res.json({
-      documentKey,
-      fields: null,
-      message: problem ? `${problem} ${RETRY_MESSAGE}` : NO_QR_MESSAGE,
-    });
+    return res.json({ documentKey, fields: null, message: NO_QR_MESSAGE });
   }
 
   logger.info({ documentKey, ...(diagnostics || {}) }, 'QR decoded from uploaded image');
