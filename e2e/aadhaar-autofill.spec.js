@@ -17,7 +17,16 @@ test.describe('Aadhaar auto-fill', () => {
     await expect(page.getByText(/please check them and correct anything/i)).toBeVisible();
 
     // Nothing on the page may carry a full Aadhaar number.
-    expect(await page.content()).not.toMatch(/\b\d{12}\b/);
+    //
+    // Blob URLs are dropped first. One holds the guest's own photo preview, and
+    // the UUID the browser assigns it ends in a group of 12 hex characters - so
+    // whenever that group happens to contain no letters, which is roughly one
+    // run in 285, it trips the scan below and fails a security assertion for a
+    // reason that has nothing to do with security. The URL is an identifier the
+    // browser minted; it cannot carry anything read off the card.
+    const content = (await page.content()).replace(/blob:[^"']*/g, '');
+
+    expect(content).not.toMatch(/\b\d{12}\b/);
   });
 
   test('auto-filled details stay editable before submitting', async ({ page }) => {
