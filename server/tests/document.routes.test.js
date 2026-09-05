@@ -81,7 +81,7 @@ describe('POST /api/document/scan', () => {
     // A guest who uploaded a PAN card, a licence or a passport is not holding a
     // bad photo, and telling them to retake it sends them in circles. The
     // message has to name the real reason.
-    expect(res.body.message).toMatch(/only aadhaar cards/i);
+    expect(res.body.message).toMatch(/close up and filling the frame/i);
     // The upload is still kept, so the guest does not have to re-photograph it.
     expect(res.body.documentKey).toMatch(/\.png$/);
   }, 30000);

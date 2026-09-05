@@ -10,12 +10,12 @@ const logger = require('../lib/logger');
 // messages say what actually happened instead of blaming the photo - the old
 // wording sent people off to retake a picture that was never the problem.
 const NO_QR_MESSAGE =
-  "We couldn't find an Aadhaar QR code on this image. Only Aadhaar cards fill the form in automatically — if this is a PAN card, passport, licence or voter ID, your photo has been saved for the front desk and you can fill in the details below. If it is an Aadhaar card, try again with the whole card in frame, well lit and in focus.";
+  "We couldn't read an Aadhaar QR code on this image. If this is an Aadhaar card, take one more photo of just the QR code, close up and filling the frame — the code is a dense one and a photo of the whole card often does not have the detail to read it. If it is a PAN card, passport, licence or voter ID, your photo has been saved for the front desk and you can fill in the details below.";
 
 // Used when the photo looks like the problem, after describePhotoProblem has
 // said which way. The guest is never stuck: the form below is always fillable.
 const RETRY_MESSAGE =
-  'Try again with the card flat, in good light, filling most of the frame — or just fill in the details below.';
+  'Try once more in better light, with just the QR code close up and filling the frame — or just fill in the details below.';
 
 const NOT_AADHAAR_MESSAGE =
   "We found a QR code, but not an Aadhaar one, so there was nothing to fill in from it. Your photo has been saved for the front desk — please fill in the details below.";

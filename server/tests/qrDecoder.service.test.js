@@ -109,8 +109,12 @@ describe('telling a guest what was wrong with the photo', () => {
     expect(describePhotoProblem(photo({ brightness: 76, detail: 1 }))).toMatch(/dark/i);
   });
 
-  it('names focus when the photo is bright but has no fine detail', () => {
-    expect(describePhotoProblem(photo({ brightness: 180, detail: 0.8 }))).toMatch(/focus/i);
+  // A real Aadhaar card arrived sharp, well lit, and undecodable: the card's own
+  // printing had merged the modules of a ~177-module symbol at the four pixels
+  // per module a whole-card photo affords. Measuring the image cannot tell that
+  // apart from camera blur, so a low-detail photo is not accused of anything.
+  it('does not accuse a bright photo of being out of focus', () => {
+    expect(describePhotoProblem(photo({ brightness: 180, detail: 0.6 }))).toBeNull();
   });
 
   // A thumbnail has no exposure or focus worth commenting on.

@@ -349,10 +349,16 @@ function describePhotoProblem(diagnostics) {
     return 'This photo came out quite dark, which is the usual reason a QR code cannot be read.';
   }
 
-  if (quality.detail < 3.5) {
-    return 'This photo looks out of focus - none of the fine detail a QR code needs came through.';
-  }
-
+  // There was a low-detail branch here that told the guest their photo was out
+  // of focus. It was wrong on the first real Aadhaar card it met: the photo was
+  // sharp - crisp text, a clearly resolved symbol - and what actually defeated
+  // the decoders was the card's own printing. A version-40 Aadhaar QR is around
+  // 177 modules across, so a photo of the whole card gives roughly four pixels
+  // per module, and ink bleed on the printed card merged neighbouring modules
+  // into blobs at that scale. Nothing separates that from genuine camera blur
+  // by measuring the image, and telling someone their steady, well-lit photo is
+  // out of focus sends them round a loop they cannot get out of. The advice for
+  // both cases is the same and lives in the message itself: get closer.
   return null;
 }
 
