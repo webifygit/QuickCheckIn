@@ -32,7 +32,7 @@
   "crons": [
     {
       "path": "/api/maintenance/sweep-orphans",
-      "schedule": "0 * * * *"
+      "schedule": "0 3 * * *"
     }
   ]
 }
