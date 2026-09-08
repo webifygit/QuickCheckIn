@@ -132,7 +132,13 @@ function createS3Driver() {
           Key: key,
           Body: buffer,
           ContentType: mimeType,
-          ServerSideEncryption: 'AES256',
+          // Only asked of AWS. S3-compatible services - R2, Supabase, MinIO -
+          // encrypt at rest as a property of the service rather than a
+          // per-request header, and several reject the header outright with a
+          // 400 that surfaces as "the upload failed" and nothing more. Sending
+          // it where it is understood, and relying on the service elsewhere, is
+          // the difference between an ID photo being stored and a dead end.
+          ...(config.S3_ENDPOINT ? {} : { ServerSideEncryption: 'AES256' }),
         })
       );
       return key;
