@@ -1,5 +1,12 @@
 node_modules/
 .env
+# `.env` alone does not match `.env.production` or `.env.local` -
+# git treats them as different filenames. Cover the variants too, or a
+# file holding database and bucket credentials is one `git add .` away
+# from the history.
+.env.*
+!.env.example
+!*.TEMPLATE
 server/uploads/*
 !server/uploads/.gitkeep
 server/gcp-vision-key.json
