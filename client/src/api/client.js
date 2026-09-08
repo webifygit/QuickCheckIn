@@ -1,11 +1,23 @@
 import axios from 'axios';
 
-// An explicitly empty VITE_API_BASE_URL means "same origin": the API is being
-// served by the same process that served this page, so requests go to relative
-// paths and there is no CORS in the picture at all. `??` rather than `||` is
-// what makes that empty value survive - `||` would silently fall through to the
-// localhost default and break every request in production.
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000';
+// Same origin is the default for a built bundle: whatever host served this page
+// also serves the API, so requests go to relative paths and there is no CORS in
+// the picture at all. That is true of every way this ships - the container, the
+// single-process demo, and a serverless deployment behind one domain.
+//
+// Only `npm run dev` differs, where Vite serves the page on :5173 and the API
+// runs separately on :4000, so the dev default points there.
+//
+// The previous default was localhost:4000 for every build that did not set
+// VITE_API_BASE_URL explicitly. Vite inlines this at build time, so a platform
+// that builds from the repo without setting it - which is the normal case -
+// shipped a bundle asking every visitor's own machine for the API. Nothing
+// fails at build time; it fails in the visitor's browser.
+//
+// `??` rather than `||` so an explicitly empty value still means same origin
+// rather than falling through to the dev default.
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? 'http://localhost:4000' : '');
 
 const TOKEN_KEY = 'staffToken';
 const NAME_KEY = 'staffName';
