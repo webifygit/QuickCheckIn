@@ -9,7 +9,7 @@
   ],
   "functions": {
     "api/**": {
-      "includeFiles": "server/{node_modules/zxing-wasm/dist/reader/*.wasm,tessdata/*}",
+      "includeFiles": "server/{node_modules/zxing-wasm/dist/reader/*.wasm,node_modules/tesseract.js-core/*,tessdata/*}",
       "maxDuration": 60
     }
   },

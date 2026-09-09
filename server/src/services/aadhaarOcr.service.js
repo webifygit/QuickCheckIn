@@ -161,14 +161,37 @@ async function readCardText(buffer) {
   return { found, timings, cardBox: box };
 }
 
+// A hang is the failure this has to be defended against, not a slow read.
+// When tesseract's core wasm was missing from the deployment, emscripten aborted
+// inside the worker and killed it without ever rejecting the promise waiting on
+// it: every request sat until the platform's 60s ceiling and returned a 504. A
+// missing file turned into an outage on the one path that was already failing.
+//
+// Ten seconds is far outside anything measured - a whole card reads in about
+// two - so this only ever fires on that kind of fault. The wait is abandoned
+// rather than cancelled, since a wedged worker will not answer anyway; the
+// process is short-lived and the next invocation starts clean.
+const OCR_BUDGET_MS = 10_000;
+
 // Never throws: this is a fallback behind a fallback, and a guest who is already
-// being asked to type their details must not also meet a 500.
+// being asked to type their details must not also meet a 500 or a timeout.
 async function tryReadCardText(buffer) {
+  let timer;
   try {
-    return await readCardText(buffer);
+    return await Promise.race([
+      readCardText(buffer),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`OCR exceeded ${OCR_BUDGET_MS}ms`)), OCR_BUDGET_MS);
+      }),
+    ]);
   } catch (err) {
     logger.warn({ err: err.message }, 'OCR fallback failed');
+    // A worker that timed out is not reusable, and holding the promise would
+    // make every later call wait on the same wedged one.
+    workerPromise = null;
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
