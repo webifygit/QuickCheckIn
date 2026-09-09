@@ -5,7 +5,7 @@ import { buildSecureQr } from './helpers/secureQr.js';
 const require = createRequire(import.meta.url);
 const QRCode = require('qrcode');
 const Jimp = require('jimp');
-const { decodeQrFromImage } = require('../src/services/qrDecoder.service');
+const { decodeQrFromImage, decodeQrWithDiagnostics, initQrDecoder } = require('../src/services/qrDecoder.service');
 
 const CARD = {
   referenceId: '123420190101120000',
@@ -97,3 +97,20 @@ describe('reading the QR off a card photo', () => {
   }, DECODE_TIMEOUT_MS);
 });
 
+// ZXing does the real work; jsQR exists for when the wasm module cannot load.
+// That fallback is silent by design, which is exactly what makes it dangerous.
+// In production the wasm was not being shipped at all: ZXing failed to
+// initialise on every cold start and every scan ran on the slow fallback, with
+// nothing failing loudly - reads simply got worse. These are the tripwire.
+describe('the ZXing decoder is actually available', () => {
+  it('finds its wasm binary and initialises', async () => {
+    await expect(initQrDecoder()).resolves.toBe(true);
+  });
+
+  it('is the decoder that answers, not the fallback', async () => {
+    const { text, diagnostics } = await decodeQrWithDiagnostics(await renderCard(payload()));
+
+    expect(text).toBeTruthy();
+    expect(diagnostics.decoder).toBe('zxing');
+  }, DECODE_TIMEOUT_MS);
+});

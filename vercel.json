@@ -7,6 +7,11 @@
   "regions": [
     "bom1"
   ],
+  "functions": {
+    "api/**": {
+      "includeFiles": "server/node_modules/zxing-wasm/dist/reader/*.wasm"
+    }
+  },
   "routes": [
     {
       "src": "/api/(.*)",

@@ -1,5 +1,4 @@
 const fs = require('fs');
-const path = require('path');
 const Jimp = require('jimp');
 const jsQR = require('jsqr');
 const { readBarcodesFromImageFile, prepareZXingModule } = require('zxing-wasm/reader');
@@ -50,13 +49,17 @@ const JSQR_BUDGET_MS = 2_500;
 
 // The wasm binary is loaded from disk rather than fetched: zxing-wasm's default
 // loader expects a URL it can fetch, which is a browser assumption.
-const WASM_PATH = path.join(
-  path.dirname(require.resolve('zxing-wasm/reader')),
-  '..',
-  '..',
-  'reader',
-  'zxing_reader.wasm'
-);
+//
+// Resolved through the package's own exports map, with the specifier written
+// out in full. That is not a style preference - a serverless build decides what
+// to ship by reading the source, and it only recognises a require.resolve whose
+// argument is a literal string. The path this replaced was assembled with
+// path.join from a different entry point, which no bundler can follow: the file
+// was left out of the deployment, this init failed with ENOENT on every cold
+// start, and every scan silently fell through to the jsQR path - the slow
+// fallback that exists for when the wasm cannot load, quietly doing all the
+// work in production while the fast decoder was never even tried.
+const WASM_PATH = require.resolve('zxing-wasm/reader/zxing_reader.wasm');
 
 const READER_OPTIONS = {
   formats: ['QRCode'],
