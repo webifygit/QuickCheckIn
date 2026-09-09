@@ -9,8 +9,19 @@ const logger = require('../lib/logger');
 // uploads a PAN card, a licence or a passport has done nothing wrong, so these
 // messages say what actually happened instead of blaming the photo - the old
 // wording sent people off to retake a picture that was never the problem.
+// Measured on a guest's own card, which is why this no longer asks for a better
+// photo. On a small cut-out Aadhaar card the finder squares photograph perfectly
+// sharp while the data squares are merged into blobs - roughly six pixels per
+// module, well above any decoder's floor, and still unreadable. The symbol packs
+// ~137 modules into about 2.5cm, so each is around 0.18mm, and consumer printing
+// bleeds them together. The grid is destroyed on the card, before a camera is
+// involved: run lengths across it come out uniformly random instead of clustered
+// at a module width.
+//
+// So the advice is a different card, not a different photograph. Telling this
+// guest to hold it closer sends them round a loop that cannot terminate.
 const NO_QR_MESSAGE =
-  "We couldn't read an Aadhaar QR code on this image. Aadhaar's code is a dense one: photograph it on its own, close up enough to fill the frame, with no reflection across it — a picture of the whole card usually does not carry enough detail. Sending the photo through a chat app first shrinks it, so upload the original. If this is a PAN card, passport, licence or voter ID, your photo has been saved for the front desk and you can fill in the details below.";
+  "We couldn't read an Aadhaar QR code on this image. If this is a small cut-out card, that is usually the card rather than your photo — the code packs a lot of detail into about 2.5cm, and home or shop printing blurs the squares together, which no camera can recover. Your full A4 Aadhaar letter carries the same code printed much larger and normally reads. If this is a PAN card, passport, licence or voter ID, there is no Aadhaar code on it to read. Either way your photo has been saved for the front desk — please fill in the details below.";
 
 const NOT_AADHAAR_MESSAGE =
   "We found a QR code, but not an Aadhaar one, so there was nothing to fill in from it. Your photo has been saved for the front desk — please fill in the details below.";
