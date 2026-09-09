@@ -49,6 +49,9 @@ export default function RegisterForm() {
   const [scan, setScan] = useState(null); // { tone, message }
   const [autofilled, setAutofilled] = useState([]);
   const [cameraOpen, setCameraOpen] = useState(false);
+  // Whether the filled values came from printed text rather than the QR, which
+  // changes how hard the form asks the guest to check them.
+  const [ocrSourced, setOcrSourced] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState('');
@@ -165,10 +168,19 @@ export default function RegisterForm() {
           }
           return next;
         });
-        setAutofilled(filled);
+        // Merged, not replaced. The two sides carry different fields - name and
+        // date of birth on the front, address on the back - so a second upload
+        // must not un-mark what the first one filled.
+        setAutofilled((current) => [...new Set([...current, ...filled])]);
+        setOcrSourced(data.source === 'ocr');
         setScan({
-          tone: 'success',
+          // Fields read off printed text are a guess where the QR is a fact, so
+          // they are not announced with a tick. The guest is the only one who
+          // can tell whether they are right, and the wording has to earn that
+          // second look rather than assume it.
+          tone: data.source === 'ocr' ? 'warning' : 'success',
           message:
+            data.message ||
             'We read your Aadhaar QR code and filled in the details below. Please check them and correct anything that looks wrong.',
         });
       } else if (!alreadyFilled) {
@@ -283,7 +295,12 @@ export default function RegisterForm() {
     );
   }
 
-  const hint = (key) => (autofilled.includes(key) ? 'Filled in from your Aadhaar card' : undefined);
+  const hint = (key) =>
+    autofilled.includes(key)
+      ? ocrSourced
+        ? 'Read from the printed card — please check'
+        : 'Filled in from your Aadhaar card'
+      : undefined;
 
   return (
     <main id="main" className="page page--form">

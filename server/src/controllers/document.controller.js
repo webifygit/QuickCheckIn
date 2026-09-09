@@ -23,6 +23,12 @@ const logger = require('../lib/logger');
 const NO_QR_MESSAGE =
   "We couldn't read an Aadhaar QR code on this image. If this is a small cut-out card, that is usually the card rather than your photo — the code packs a lot of detail into about 2.5cm, and home or shop printing blurs the squares together, which no camera can recover. Your full A4 Aadhaar letter carries the same code printed much larger and normally reads. If this is a PAN card, passport, licence or voter ID, there is no Aadhaar code on it to read. Either way your photo has been saved for the front desk — please fill in the details below.";
 
+// Said when the QR could not be read but the printed text could. Deliberately
+// less confident than the QR message: those details are signed by UIDAI, these
+// were read off ink by a machine, and the guest is the one who can tell.
+const OCR_MESSAGE =
+  "We couldn't read your card's QR code, so we read the printed details instead. Please check every field below carefully and correct anything that is wrong — this way of reading is less reliable than the code.";
+
 const NOT_AADHAAR_MESSAGE =
   "We found a QR code, but not an Aadhaar one, so there was nothing to fill in from it. Your photo has been saved for the front desk — please fill in the details below.";
 
@@ -49,38 +55,35 @@ function clientQrText(req) {
   return trimmed && trimmed.length <= MAX_CLIENT_QR_CHARS ? trimmed : null;
 }
 
-// Runs the OCR fallback on a card whose QR could not be read, records how it
-// went, and changes nothing the guest sees.
+// Reads the printed text off a card whose QR could not be decoded.
 //
-// A measurement, deliberately: the decision about where this code lives is a
-// timing question, and the honest way to answer it is real uploads rather than
-// a card chosen because it happened to be on hand. Logged per region are the
-// duration, tesseract's confidence, and whether anything was found - never the
-// text itself, which is the guest's name and address.
-//
-// Enabled only when OCR_SPIKE is set, so this cannot quietly become a permanent
-// cost on a path that is already the slow one.
+// This is the last thing tried, and it is a guess where the QR is a fact: the
+// QR's payload is signed by UIDAI, while this is tesseract's opinion of some
+// ink. Guests are told as much, and the front desk still checks it. Fields that
+// did not come out cleanly are left empty rather than filled with something
+// plausible, because a wrong value the guest has to notice is worse than a
+// blank one they simply complete.
 //
 // Required lazily. tesseract pulls in a worker and a 5MB model, and a guest
 // whose QR read on the first pass should not pay to load either.
-async function measureOcrFallback(buffer, documentKey) {
-  if (!process.env.OCR_SPIKE) return;
-
+async function readPrintedFields(buffer, documentKey) {
   try {
-    const { tryReadCardText } = require('../services/aadhaarOcr.service');
-    const result = await tryReadCardText(buffer);
-    if (!result) return;
-
-    const regions = Object.fromEntries(
-      Object.entries(result.found).map(([name, r]) => [
-        name,
-        { found: r.text.length > 0, chars: r.text.length, confidence: r.confidence },
-      ])
-    );
-    logger.info({ documentKey, ...result.timings, regions }, 'OCR fallback measured');
+    const { readAadhaarFields } = require('../services/aadhaarOcr.service');
+    const result = await readAadhaarFields(buffer);
+    if (!result) {
+      logger.info({ documentKey }, 'OCR found nothing usable');
+      return null;
+    }
+    // The values themselves are the guest's name and address and are not logged.
+    // What is worth keeping is which fields a real card gave up and how sure the
+    // region was - that is how the geometry gets checked against cards other
+    // than the one it was derived from.
+    logger.info({ documentKey, ...result.diagnostics }, 'Fields read from printed text');
+    return result.fields;
   } catch (err) {
-    // The spike must never be why a guest's upload fails.
+    // OCR must never be why a guest's upload fails: they can still type.
     logger.warn({ err: err.message, documentKey }, 'OCR fallback threw');
+    return null;
   }
 }
 
@@ -124,7 +127,10 @@ async function scan(req, res) {
     // report of "the scan didn't work" is unanswerable.
     logger.info({ documentKey, ...(diagnostics || {}) }, 'No QR found in uploaded image');
 
-    await measureOcrFallback(req.file.buffer, documentKey);
+    const printed = await readPrintedFields(req.file.buffer, documentKey);
+    if (printed) {
+      return res.json({ documentKey, fields: printed, source: 'ocr', message: OCR_MESSAGE });
+    }
 
     return res.json({ documentKey, fields: null, message: NO_QR_MESSAGE });
   }

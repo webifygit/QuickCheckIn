@@ -50,6 +50,11 @@ const REGIONS = {
   identity: { x: 0.3, y: 0.18, w: 0.46, h: 0.36, psm: PSM.SINGLE_COLUMN },
   // The number, printed large across the lower third.
   number: { x: 0.1, y: 0.55, w: 0.85, h: 0.3, psm: PSM.SINGLE_COLUMN },
+  // The address, which is on the other side of the card entirely. Both sides
+  // are put through the same regions because a guest's two uploads arrive as
+  // separate requests and nothing says which is which - whichever region finds
+  // something wins, and the ones looking at the wrong side come back empty.
+  address: { x: 0, y: 0.15, w: 0.62, h: 0.7, psm: PSM.SINGLE_BLOCK },
 };
 
 let workerPromise = null;
@@ -150,7 +155,10 @@ async function readCardText(buffer) {
     try {
       await worker.setParameters({ tessedit_pageseg_mode: region.psm });
       const { data } = await worker.recognize(await cropRegion(card, region).getBufferAsync('image/png'));
-      found[name] = { text: data.text.replace(/\s+/g, ' ').trim(), confidence: Math.round(data.confidence) };
+      // Line breaks are kept: the address is the one field whose structure
+      // survives in them, and flattening it here would throw that away before
+      // the parser ever sees it.
+      found[name] = { text: data.text.trim(), confidence: Math.round(data.confidence) };
     } catch (err) {
       found[name] = { text: '', confidence: 0, error: err.message };
     }
@@ -159,6 +167,149 @@ async function readCardText(buffer) {
 
   timings.totalMs = Date.now() - startedAt;
   return { found, timings, cardBox: box };
+}
+
+// Aadhaar numbers carry a Verhoeff check digit, and here that is not a nicety.
+// A card prints two long numbers next to each other - the Aadhaar and the VID -
+// and OCR picks whichever it likes: every preprocessed read of one real card
+// returned the VID's digits. Storing those as a guest's Aadhaar would be a
+// silently wrong record, which is worse than no record because it looks right.
+// The checksum is what tells them apart.
+const VERHOEFF_D = [
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+  [1, 2, 3, 4, 0, 6, 7, 8, 9, 5],
+  [2, 3, 4, 0, 1, 7, 8, 9, 5, 6],
+  [3, 4, 0, 1, 2, 8, 9, 5, 6, 7],
+  [4, 0, 1, 2, 3, 9, 5, 6, 7, 8],
+  [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
+  [6, 5, 9, 8, 7, 1, 0, 4, 3, 2],
+  [7, 6, 5, 9, 8, 2, 1, 0, 4, 3],
+  [8, 7, 6, 5, 9, 3, 2, 1, 0, 4],
+  [9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
+];
+const VERHOEFF_P = [
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+  [1, 5, 7, 6, 2, 8, 3, 0, 9, 4],
+  [5, 8, 0, 3, 7, 9, 6, 1, 4, 2],
+  [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
+  [9, 4, 5, 3, 1, 2, 6, 8, 7, 0],
+  [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
+  [2, 7, 9, 3, 8, 0, 6, 4, 1, 5],
+  [7, 0, 4, 6, 9, 1, 3, 2, 5, 8],
+];
+
+function isValidAadhaar(digits) {
+  if (!/^\d{12}$/.test(digits)) return false;
+  // A real number never starts 0 or 1, which rejects a lot of misreads for free.
+  if (digits[0] === '0' || digits[0] === '1') return false;
+  let c = 0;
+  const reversed = digits.split('').reverse().map(Number);
+  reversed.forEach((digit, i) => {
+    c = VERHOEFF_D[c][VERHOEFF_P[i % 8][digit]];
+  });
+  return c === 0;
+}
+
+// Only ever the last four leave this function. The full number is read to be
+// checksummed and then dropped on the floor - the guarantee that it is never
+// stored should not depend on a later step remembering to mask it.
+function maskedNumberFrom(text) {
+  const candidates = (text.replace(/[^\d\s]/g, ' ').match(/\b\d{4}\s?\d{4}\s?\d{4}\b/g) || [])
+    .map((m) => m.replace(/\s/g, ''));
+  const valid = candidates.find(isValidAadhaar);
+  return valid ? `XXXX XXXX ${valid.slice(-4)}` : '';
+}
+
+const GENDERS = [
+  [/\bFEMALE\b/i, 'FEMALE'],
+  [/\bTRANSGENDER\b/i, 'TRANSGENDER'],
+  // Last, and only after FEMALE has had its turn - it contains MALE.
+  [/\bMALE\b/i, 'MALE'],
+];
+
+// The name sits before the date of birth in the identity block, surrounded by
+// whatever tesseract made of the Gujarati or Hindi line above it. Title-cased
+// words are what survives cleanly, and picking those out of the noise is more
+// reliable than trying to clean the noise up.
+function nameFrom(text) {
+  const beforeDob = text.split(/\d{2}\s*[/.-]\s*\d{2}\s*[/.-]\s*\d{4}/)[0] || '';
+  const titled = beforeDob.match(/\b[A-Z][a-z]{2,}\b/g) || [];
+  if (titled.length >= 2) return titled.slice(-4).join(' ');
+  // Some cards print the name in capitals, where the rule above finds nothing.
+  const shouted = (beforeDob.match(/\b[A-Z]{3,}\b/g) || []).filter((w) => !/^(DOB|MALE|FEMALE|VID)$/.test(w));
+  return shouted.length >= 2 ? shouted.slice(-4).join(' ') : '';
+}
+
+function dobFrom(text) {
+  const m = text.match(/\b(\d{2})\s*[/.-]\s*(\d{2})\s*[/.-]\s*(\d{4})\b/);
+  if (!m) return '';
+  const year = Number(m[3]);
+  if (year < 1900 || year > new Date().getFullYear()) return '';
+  return `${m[1]}/${m[2]}/${m[3]}`;
+}
+
+// The address block is the one field where tesseract's line breaks carry
+// meaning, so it is rebuilt rather than flattened.
+//
+// It has to start from an anchor rather than from the top of the region. Every
+// card prints the address twice - once in the local script and once in English -
+// and tesseract renders the Gujarati or Hindi pass as convincing-looking
+// nonsense that would otherwise be pasted onto the front of a real address. The
+// English block always opens with a care-of line, so that is where to begin.
+// The leading letter is matched loosely because a crop that clips it, or a
+// misread, must not lose the whole field.
+const CARE_OF = /(?:^|\s)[CSWDcswd]?\s*\/\s*[Oo]\b/;
+
+function addressFrom(text) {
+  const lines = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 8 && (l.match(/[A-Za-z]/g) || []).length / l.length > 0.55);
+
+  const start = lines.findIndex((l) => CARE_OF.test(l) || /^address/i.test(l));
+  if (start < 0) return '';
+
+  const joined = lines
+    .slice(start, start + 7)
+    .join(', ')
+    .replace(/\s*,\s*/g, ', ')
+    .replace(/^address:?\s*/i, '')
+    // Tesseract leaves specks at the edges of lines - a stray "3%" where the
+    // card's border was. Dropped only from the ends of parts, where they are
+    // artefacts; the same characters in the middle are usually real.
+    .split(',')
+    .map((part) => part.trim().replace(/^[^A-Za-z0-9]+/, '').replace(/\s+[^A-Za-z0-9\s]+$/, ''))
+    .filter((part) => part.length > 1)
+    .join(', ')
+    .trim();
+
+  // An address has a shape: a pincode, or several parts. Without one of those
+  // this is the identity block on the other side of the card, or noise that
+  // happened to contain a slash - and a plausible-looking wrong address is the
+  // hardest kind of error for a guest to spot in their own details.
+  const hasPincode = /\b\d{6}\b/.test(joined);
+  const parts = joined.split(',').filter((p) => p.trim().length > 2).length;
+  return joined.length >= 25 && (hasPincode || parts >= 4) ? joined : '';
+}
+
+// Turns what the regions read into the same shape parseAadhaarQr returns, so
+// the caller cannot tell the two apart and nothing downstream needs to care.
+// Every field is independent: a card that yields a date of birth but no legible
+// name gives up the name rather than guessing at it, because a wrong value a
+// guest has to notice and correct is worse than an empty box.
+function fieldsFromText(found) {
+  const identity = found.identity?.text || '';
+  const number = found.number?.text || '';
+  const address = found.address?.text || '';
+
+  const gender = GENDERS.find(([re]) => re.test(identity));
+  return {
+    fullName: nameFrom(identity),
+    dob: dobFrom(identity),
+    gender: gender ? gender[1] : '',
+    idNumber: maskedNumberFrom(`${number} ${identity}`),
+    address: addressFrom(address),
+  };
 }
 
 // A hang is the failure this has to be defended against, not a slow read.
@@ -195,4 +346,39 @@ async function tryReadCardText(buffer) {
   }
 }
 
-module.exports = { tryReadCardText, readCardText, REGIONS };
+// The entry point the scan route uses: read the card, turn it into form fields,
+// and say nothing at all unless something usable came out. Returns null rather
+// than an object of empty strings, so a caller can treat "OCR found nothing"
+// and "OCR was never attempted" the same way.
+async function readAadhaarFields(buffer) {
+  const result = await tryReadCardText(buffer);
+  if (!result) return null;
+
+  const fields = fieldsFromText(result.found);
+  const populated = Object.entries(fields).filter(([, v]) => v);
+  if (populated.length === 0) return null;
+
+  return {
+    fields,
+    // Which fields were filled, and how confident the region each came from was.
+    // Logged rather than shown: it is how the region geometry gets checked
+    // against real cards instead of the one it was derived from.
+    diagnostics: {
+      decoder: 'ocr',
+      filled: populated.map(([k]) => k),
+      ...result.timings,
+      confidence: Object.fromEntries(
+        Object.entries(result.found).map(([k, v]) => [k, v.confidence])
+      ),
+    },
+  };
+}
+
+module.exports = {
+  readAadhaarFields,
+  tryReadCardText,
+  readCardText,
+  fieldsFromText,
+  isValidAadhaar,
+  REGIONS,
+};
