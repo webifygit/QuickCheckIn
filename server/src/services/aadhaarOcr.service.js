@@ -17,12 +17,15 @@ const logger = require('../lib/logger');
 // to read. This is strictly a fallback: the QR is exact and signed, while this
 // is a guess that a human then checks.
 //
-// THIS IS A MEASUREMENT SPIKE. It runs after a failed QR decode, records what
-// it found and how long it took, and does not yet feed the guest's form. The
-// question it exists to answer is whether tesseract fits inside a Vercel
-// function at all - the traineddata has to be bundled rather than fetched, and
-// the filesystem is read-only outside /tmp. Both are the shape of bug that had
-// the QR decoder silently running on its fallback in production for weeks.
+// Measured on Vercel before it was trusted with anything: 2.4s warm, 3.8s cold,
+// no timeouts. The traineddata is bundled rather than fetched and the cache
+// points at /tmp, because the alternatives are a 5MB download per cold start and
+// a read-only filesystem - the same two mistakes that had the QR decoder
+// silently running on its fallback in production for weeks.
+//
+// Every field is gated on structure rather than on tesseract's confidence,
+// which cannot be trusted: an empty string routinely comes back at 95. A field
+// that does not survive its validator is returned blank, never guessed at.
 
 // Bundled rather than downloaded. tesseract.js otherwise fetches ~5MB from a CDN
 // on every cold start, which is slow, fails closed, and is exactly how the wasm
@@ -227,25 +230,76 @@ const GENDERS = [
   [/\bMALE\b/i, 'MALE'],
 ];
 
-// The name sits before the date of birth in the identity block, surrounded by
-// whatever tesseract made of the Gujarati or Hindi line above it. Title-cased
-// words are what survives cleanly, and picking those out of the noise is more
-// reliable than trying to clean the noise up.
-function nameFrom(text) {
-  const beforeDob = text.split(/\d{2}\s*[/.-]\s*\d{2}\s*[/.-]\s*\d{4}/)[0] || '';
-  const titled = beforeDob.match(/\b[A-Z][a-z]{2,}\b/g) || [];
-  if (titled.length >= 2) return titled.slice(-4).join(' ');
-  // Some cards print the name in capitals, where the rule above finds nothing.
-  const shouted = (beforeDob.match(/\b[A-Z]{3,}\b/g) || []).filter((w) => !/^(DOB|MALE|FEMALE|VID)$/.test(w));
-  return shouted.length >= 2 ? shouted.slice(-4).join(' ') : '';
+const DATE = /\b(\d{2})\s*[/.-]\s*(\d{2})\s*[/.-]\s*(\d{4})\b/;
+
+// A card prints more than one date. Alongside the date of birth there is an
+// issue or download date, and taking the first match found means a guest's
+// birthday silently becomes the day their card was printed - a wrong value in
+// a field nobody looks at twice.
+const OTHER_DATE_LINE = /issue|download|print/i;
+
+function dobLineIndex(lines) {
+  return lines.findIndex((line) => DATE.test(line) && !OTHER_DATE_LINE.test(line));
 }
 
-function dobFrom(text) {
-  const m = text.match(/\b(\d{2})\s*[/.-]\s*(\d{2})\s*[/.-]\s*(\d{4})\b/);
-  if (!m) return '';
-  const year = Number(m[3]);
-  if (year < 1900 || year > new Date().getFullYear()) return '';
-  return `${m[1]}/${m[2]}/${m[3]}`;
+function dobFrom(lines) {
+  const index = dobLineIndex(lines);
+  if (index < 0) return '';
+  const [, day, month, year] = lines[index].match(DATE);
+  if (Number(year) < 1900 || Number(year) > new Date().getFullYear()) return '';
+  if (Number(day) < 1 || Number(day) > 31 || Number(month) < 1 || Number(month) > 12) return '';
+  return `${day}/${month}/${year}`;
+}
+
+// Aadhaar's layout puts the name directly above the date of birth, so that is
+// what to anchor on. Position beats appearance here: "Government of India" is a
+// perfectly name-shaped pair of capitalised words, and no amount of tuning a
+// word-list separates it from a real name reliably.
+//
+// It is worth being explicit about why there is no list of surnames to skip.
+// Kumar, Singh, Devi and Memon are among the commonest names in the country -
+// any list holding them returns a blank name for a large share of guests, and
+// does it silently, which is the worst way for this to fail.
+const NOT_A_NAME = /\b(DOB|VID|UID|Aadhaar|Government|India|Authority|Unique|Identification|Male|Female|Transgender|Issue|Date|Download)\b/i;
+
+// Tesseract leaves specks at the edges of a crop, which come through as one- or
+// two-letter words bolted onto the front or back of the name. No real name part
+// is that short, so they can go.
+function trimSpecks(line) {
+  return line
+    .trim()
+    .split(/\s+/)
+    .filter((word) => word.length > 2)
+    .join(' ');
+}
+
+function looksLikeName(line) {
+  const words = line.trim().split(/\s+/);
+  return (
+    words.length >= 2 &&
+    words.length <= 5 &&
+    /^[A-Za-z][A-Za-z.\s]+$/.test(line.trim()) &&
+    !NOT_A_NAME.test(line) &&
+    !DATE.test(line)
+  );
+}
+
+function nameFrom(lines) {
+  const index = dobLineIndex(lines);
+
+  // Walk up from the date of birth. The line immediately above is the name on
+  // every card; anything further is the header, so stop rather than climb.
+  for (let i = index - 1; i >= 0 && i >= index - 3; i -= 1) {
+    const line = trimSpecks(lines[i].replace(/^(name|नाम|નામ)\s*[:.]?\s*/i, ''));
+    if (looksLikeName(line)) return line;
+  }
+
+  // No usable date to anchor on - the crop clipped it, or it did not read. Fall
+  // back to picking name-shaped words out of the block, which is weaker but
+  // beats returning nothing.
+  const beforeDate = (index < 0 ? lines : lines.slice(0, index)).join(' ');
+  const titled = (beforeDate.match(/\b[A-Z][a-z]{2,}\b/g) || []).filter((w) => !NOT_A_NAME.test(w));
+  return titled.length >= 2 ? titled.slice(-4).join(' ') : '';
 }
 
 // The address block is the one field where tesseract's line breaks carry
@@ -302,10 +356,15 @@ function fieldsFromText(found) {
   const number = found.number?.text || '';
   const address = found.address?.text || '';
 
+  const identityLines = identity
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+
   const gender = GENDERS.find(([re]) => re.test(identity));
   return {
-    fullName: nameFrom(identity),
-    dob: dobFrom(identity),
+    fullName: nameFrom(identityLines),
+    dob: dobFrom(identityLines),
     gender: gender ? gender[1] : '',
     idNumber: maskedNumberFrom(`${number} ${identity}`),
     address: addressFrom(address),
