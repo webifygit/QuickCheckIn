@@ -23,11 +23,16 @@ const logger = require('../lib/logger');
 const NO_QR_MESSAGE =
   "We couldn't read an Aadhaar QR code on this image. If this is a small cut-out card, that is usually the card rather than your photo — the code packs a lot of detail into about 2.5cm, and home or shop printing blurs the squares together, which no camera can recover. Your full A4 Aadhaar letter carries the same code printed much larger and normally reads. If this is a PAN card, passport, licence or voter ID, there is no Aadhaar code on it to read. Either way your photo has been saved for the front desk — please fill in the details below.";
 
-// Said when the QR could not be read but the printed text could. Deliberately
-// less confident than the QR message: those details are signed by UIDAI, these
-// were read off ink by a machine, and the guest is the one who can tell.
+// Said when the QR could not be read but the printed text could.
+//
+// It leads with what worked. The first version opened on the QR having failed,
+// which is true and was the wrong thing to say first: a guest whose details have
+// all just filled in correctly reads a caution about a failure as "this is
+// broken", and goes looking for the problem. What they actually need to know is
+// that the details came from ink rather than from the signed code, so they are
+// worth a second look - a request, not an apology.
 const OCR_MESSAGE =
-  "We couldn't read your card's QR code, so we read the printed details instead. Please check every field below carefully and correct anything that is wrong — this way of reading is less reliable than the code.";
+  "We've filled in your details by reading the printed text on your card, because its QR code couldn't be read. Please check each one before you submit — reading print is less exact than the code, so small mistakes are possible.";
 
 const NOT_AADHAAR_MESSAGE =
   "We found a QR code, but not an Aadhaar one, so there was nothing to fill in from it. Your photo has been saved for the front desk — please fill in the details below.";

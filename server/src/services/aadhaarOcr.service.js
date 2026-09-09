@@ -332,18 +332,32 @@ function addressFrom(text) {
     // card's border was. Dropped only from the ends of parts, where they are
     // artefacts; the same characters in the middle are usually real.
     .split(',')
-    .map((part) => part.trim().replace(/^[^A-Za-z0-9]+/, '').replace(/\s+[^A-Za-z0-9\s]+$/, ''))
-    .filter((part) => part.length > 1)
-    .join(', ')
-    .trim();
+    .map((part) =>
+      part
+        .trim()
+        .replace(/^[^A-Za-z0-9]+/, '')
+        .replace(/\s+[^A-Za-z0-9\s]+$/, '')
+        // A one- or two-letter word at the end of a line is a speck off the
+        // card's border, not part of the address - "Nr Shahwazuuddin is". Digits
+        // are left alone, because a house or plot number belongs there.
+        .replace(/\s+[A-Za-z]{1,2}$/, '')
+    )
+    .filter((part) => part.length > 1);
+
+  // Whatever the crop caught past the end of the address - a border mark read as
+  // "3%". Only trimmed from the tail: the same fragment in the middle is more
+  // likely a house number than a speck.
+  while (joined.length && joined[joined.length - 1].length < 3) joined.pop();
+
+  const address = joined.join(', ').trim();
 
   // An address has a shape: a pincode, or several parts. Without one of those
   // this is the identity block on the other side of the card, or noise that
   // happened to contain a slash - and a plausible-looking wrong address is the
   // hardest kind of error for a guest to spot in their own details.
-  const hasPincode = /\b\d{6}\b/.test(joined);
-  const parts = joined.split(',').filter((p) => p.trim().length > 2).length;
-  return joined.length >= 25 && (hasPincode || parts >= 4) ? joined : '';
+  const hasPincode = /\b\d{6}\b/.test(address);
+  const parts = joined.filter((p) => p.trim().length > 2).length;
+  return address.length >= 25 && (hasPincode || parts >= 4) ? address : '';
 }
 
 // Turns what the regions read into the same shape parseAadhaarQr returns, so
