@@ -597,50 +597,67 @@
 
 /* ---------------------------------------------------------- qr camera -- */
 
+/* The aspect ratio is set inline from the stream's own dimensions, so the
+ * element is exactly the shape of the frame being decoded. 3/4 is only the
+ * placeholder shape while the camera is opening. */
 .qr-camera {
   position: relative;
   border-radius: var(--radius-lg);
   overflow: hidden;
   background: #000;
   aspect-ratio: 3 / 4;
-}
-
-@media (min-width: 640px) {
-  .qr-camera {
-    aspect-ratio: 4 / 3;
-  }
+  max-height: 70vh;
+  margin: 0 auto;
 }
 
 .qr-camera__video {
   width: 100%;
   height: 100%;
-  /* Cover, so the preview is never letterboxed. The decode crops the native
-   * frame independently of this, but the box below has to sit over what the
-   * guest actually sees or the aiming guidance is a lie. */
-  object-fit: cover;
+  /* Contain, not cover. Cropping the preview would mean the guest is aiming at
+   * a different region than the one being read, and the box would be lying to
+   * them at exactly the moment they are trying to follow it. */
+  object-fit: contain;
   display: block;
 }
 
-/* The decode region, drawn at the same 72% of the shorter side that
- * QrCamera.jsx crops. These two numbers have to move together. */
+/* The decode region: the same 72% of the shorter side that QrCamera.jsx crops.
+ * Because the element matches the stream's shape, "72% of the shorter side" is
+ * the same square in both places. These two numbers have to move together. */
 .qr-camera__box {
   position: absolute;
   top: 50%;
   left: 50%;
   translate: -50% -50%;
-  width: 72%;
+  /* Whether this is 72% of the width or of the height is decided in JSX from
+   * the stream's shape, because "the shorter side" is what the crop uses. */
   aspect-ratio: 1;
   border: 3px solid var(--text-on-accent);
   border-radius: var(--radius);
   box-shadow: 0 0 0 100vmax rgb(0 0 0 / 45%);
 }
 
-@media (min-width: 640px) {
-  .qr-camera__box {
-    /* Landscape: the shorter side is the height, so match against it. */
-    width: auto;
-    height: 72%;
-  }
+.qr-camera__controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.qr-camera__zoom {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.qr-camera__zoom input {
+  flex: 1;
+}
+
+.qr-camera__zoom-value {
+  font-variant-numeric: tabular-nums;
+  min-width: 3.5ch;
 }
 
 .qr-camera__status {

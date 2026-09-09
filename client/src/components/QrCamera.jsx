@@ -67,6 +67,11 @@ const CAMERA_CONSTRAINTS = {
     facingMode: { ideal: 'environment' },
     width: { ideal: 3840 },
     height: { ideal: 2160 },
+    // Advanced constraints are requests, not requirements: a camera that does
+    // not understand focusMode ignores it rather than refusing to open. Asked
+    // for because a card held still at close range is exactly the subject a
+    // phone is most likely to leave focused on the background.
+    advanced: [{ focusMode: 'continuous' }],
   },
 };
 
@@ -117,11 +122,37 @@ function captureFrame(video) {
   return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));
 }
 
+// What the camera can be asked to do varies by device, so the controls are
+// built from what this track actually reports rather than assumed.
+function readControls(track) {
+  const caps = track.getCapabilities?.() || {};
+  const zoom = caps.zoom
+    ? {
+        min: caps.zoom.min ?? 1,
+        max: caps.zoom.max ?? 1,
+        step: caps.zoom.step || 0.1,
+      }
+    : null;
+  return {
+    zoom: zoom && zoom.max > zoom.min ? zoom : null,
+    torch: Boolean(caps.torch),
+  };
+}
+
 export default function QrCamera({ onDecoded, onCancel }) {
   const videoRef = useRef(null);
+  const trackRef = useRef(null);
   const [state, setState] = useState('starting');
   const [error, setError] = useState('');
   const [hint, setHint] = useState(false);
+  // Null until the stream is open and has said what it supports.
+  const [controls, setControls] = useState({ zoom: null, torch: false });
+  const [zoom, setZoom] = useState(1);
+  const [torchOn, setTorchOn] = useState(false);
+  // The container is matched to the stream's own shape so the preview is never
+  // cropped. That is what lets the box on screen mean the same thing as the
+  // region being decoded - see the crop in the loop below.
+  const [aspect, setAspect] = useState(null);
 
   // onDecoded is read through a ref so that a caller passing an inline arrow -
   // which every render makes anew - does not tear the camera down and open it
@@ -172,6 +203,32 @@ export default function QrCamera({ onDecoded, onCancel }) {
         // Safari rejects play() if the panel closed mid-call. The loop below
         // exits on the same condition, so there is nothing else to do.
       }
+      if (cancelled) return;
+
+      const [track] = stream.getVideoTracks();
+      trackRef.current = track;
+      const available = readControls(track);
+      setControls(available);
+      setAspect(video.videoWidth && video.videoHeight ? video.videoWidth / video.videoHeight : null);
+
+      // Start zoomed in a little where the camera allows it. This is the whole
+      // point of having zoom here: a dense QR needs the code to fill the frame,
+      // and the obvious way to manage that - moving the phone closer - runs into
+      // the lens's minimum focus distance. Past a few centimetres the picture
+      // goes soft, and a soft QR is unreadable however many pixels it spans.
+      // Zooming reaches the same framing from a distance the camera can still
+      // focus at, which is what every payment app is doing.
+      if (available.zoom) {
+        const start = Math.min(2, available.zoom.max);
+        setZoom(start);
+        try {
+          await track.applyConstraints({ advanced: [{ zoom: start }] });
+        } catch {
+          // A camera that advertised zoom and then refused it is not worth
+          // reporting: the guest can still scan, just without the help.
+        }
+      }
+
       if (cancelled) return;
       setState('scanning');
 
@@ -231,9 +288,29 @@ export default function QrCamera({ onDecoded, onCancel }) {
 
     return () => {
       cancelled = true;
+      trackRef.current = null;
       stopStream(stream);
     };
   }, []);
+
+  async function applyZoom(value) {
+    setZoom(value);
+    try {
+      await trackRef.current?.applyConstraints({ advanced: [{ zoom: value }] });
+    } catch {
+      // Ignored for the same reason as the initial zoom: scanning continues.
+    }
+  }
+
+  async function toggleTorch() {
+    const next = !torchOn;
+    setTorchOn(next);
+    try {
+      await trackRef.current?.applyConstraints({ advanced: [{ torch: next }] });
+    } catch {
+      setTorchOn(!next);
+    }
+  }
 
   if (state === 'error') {
     return (
@@ -248,9 +325,21 @@ export default function QrCamera({ onDecoded, onCancel }) {
 
   return (
     <div className="stack">
-      <div className="qr-camera">
+      {/* Shaped to the stream, so the whole frame is visible and nothing is
+        * cropped away. The box below is then the same 72% of the shorter side
+        * that gets decoded - without this the two disagree, and a guest who
+        * neatly fills the box on screen is not filling the region being read. */}
+      <div className="qr-camera" style={aspect ? { aspectRatio: String(aspect) } : undefined}>
         <video ref={videoRef} className="qr-camera__video" playsInline muted />
-        <div className="qr-camera__box" aria-hidden="true" />
+        <div
+          className="qr-camera__box"
+          aria-hidden="true"
+          style={
+            aspect && aspect > 1
+              ? { height: `${BOX_FRACTION * 100}%` }
+              : { width: `${BOX_FRACTION * 100}%` }
+          }
+        />
         {state === 'starting' && (
           <div className="qr-camera__status">
             <Spinner label="Starting the camera" />
@@ -258,11 +347,42 @@ export default function QrCamera({ onDecoded, onCancel }) {
         )}
       </div>
 
+      {(controls.zoom || controls.torch) && (
+        <div className="qr-camera__controls">
+          {controls.zoom && (
+            <label className="qr-camera__zoom">
+              <span>Zoom</span>
+              <input
+                type="range"
+                min={controls.zoom.min}
+                max={controls.zoom.max}
+                step={controls.zoom.step}
+                value={zoom}
+                onChange={(event) => applyZoom(Number(event.target.value))}
+              />
+              <span className="qr-camera__zoom-value">{zoom.toFixed(1)}×</span>
+            </label>
+          )}
+          {controls.torch && (
+            <button
+              type="button"
+              className={`btn btn--sm${torchOn ? '' : ' btn--secondary'}`}
+              onClick={toggleTorch}
+              aria-pressed={torchOn}
+            >
+              {torchOn ? 'Light on' : 'Light off'}
+            </button>
+          )}
+        </div>
+      )}
+
       <p className="qr-camera__hint" role="status">
         {state === 'starting'
           ? 'Starting the camera…'
           : hint
-            ? 'Nothing yet — bring the QR code closer, until it fills the square.'
+            ? controls.zoom
+              ? 'Nothing yet — fill the square with the code, using zoom rather than moving closer. Too close and the camera cannot focus.'
+              : 'Nothing yet — fill the square with the code, and hold steady while it focuses.'
             : 'Hold the QR code on your Aadhaar card inside the square.'}
       </p>
 
