@@ -114,3 +114,30 @@ describe('the ZXing decoder is actually available', () => {
     expect(diagnostics.decoder).toBe('zxing');
   }, DECODE_TIMEOUT_MS);
 });
+
+// The jsQR sweep exists for one case: the wasm module failing to load. Running
+// it whenever ZXing merely declined an image cost two and a half seconds of
+// every failed scan and never once rescued a symbol - and the failing path is
+// the one where a guest is already waiting on the OCR fallback.
+describe('the slow sweep runs only when the fast decoder cannot', () => {
+  it('is skipped when ZXing simply did not find a code', async () => {
+    const blank = await new Jimp(1200, 800, 0xffffffff).getBufferAsync(Jimp.MIME_JPEG);
+    const { text, diagnostics } = await decodeQrWithDiagnostics(blank);
+
+    expect(text).toBeNull();
+    expect(diagnostics.jsqrSkipped).toBe('zxing-declined');
+    expect(diagnostics.jsqrMs).toBeUndefined();
+  }, DECODE_TIMEOUT_MS);
+
+  // Skipping the sweep must not skip the measurements taken alongside it. They
+  // are what separates "too small in frame" from "never focused", and without
+  // them a report that a scan failed is unanswerable.
+  it('still measures the image it could not read', async () => {
+    const blank = await new Jimp(1200, 800, 0xffffffff).getBufferAsync(Jimp.MIME_JPEG);
+    const { diagnostics } = await decodeQrWithDiagnostics(blank);
+
+    expect(diagnostics.source).toMatchObject({ width: 1200, height: 800 });
+    expect(diagnostics.quality).toHaveProperty('brightness');
+    expect(diagnostics.quality).toHaveProperty('detail');
+  }, DECODE_TIMEOUT_MS);
+});

@@ -17,15 +17,17 @@ const logger = require('../lib/logger');
 //   On card photos taken at an angle it reads symbols jsQR cannot, and it
 //   answers in about a tenth of a second either way.
 //
-//   jsQR is the fallback. It is pure JavaScript, so it still runs if the wasm
-//   module fails to initialise, and its sweep of enhanced variants occasionally
-//   catches an image ZXing declines. It is slow, which is why it goes second.
+//   jsQR is pure JavaScript, and it runs only when the wasm module could not be
+//   loaded at all. That is the case it exists for.
 //
+// It used to run on every image ZXing declined as well, and that was wrong.
 // Measured on a fixture set of synthetic card photos (see scripts/scan-check.js
 // for running real ones): ZXing reads 7 of 9 in 40-150ms; the jsQR sweep reads
-// 6 of 9 in 0.6-6.7s. The two the pair cannot read are genuinely unreadable -
-// too few pixels per module, or too much motion blur - and the guest is better
-// served by the manual form.
+// 6 of 9 in 0.6-6.7s - and never a symbol ZXing had turned down. So the sweep
+// was spending two and a half seconds of every failed scan to find nothing, on
+// the one path where a guest is already waiting and where the OCR fallback now
+// runs. The two neither can read are genuinely unreadable, and their text is
+// read by aadhaarOcr.service instead.
 
 // A photo decodes to four bytes per pixel, so 12MP is ~48MB for the source
 // bitmap: the most one request may hold in the jsQR path. Downscaling below
@@ -239,11 +241,13 @@ function jsqrPasses(grey) {
   return passes;
 }
 
-async function decodeWithJsQr(input, diagnostics) {
-  const deadline = Date.now() + JSQR_BUDGET_MS;
-
+// Decoding the image and describing it are separate jobs now, because only one
+// of them still runs on every failure. This one is cheap - a decode and a
+// sampled sweep - and it is what makes a failed scan answerable: the size of
+// the image, and how much sharp detail it holds, are the difference between a
+// card that was too small in frame and one the camera never focused on.
+async function describeSource(input, diagnostics) {
   let image = await Jimp.read(input);
-
   if (diagnostics) diagnostics.source = describeImage(image);
 
   const sourcePixels = image.bitmap.width * image.bitmap.height;
@@ -252,11 +256,14 @@ async function decodeWithJsQr(input, diagnostics) {
     if (diagnostics) diagnostics.downscaledTo = describeImage(image);
   }
 
-  // Greyscale once, up front: every pass below works from this.
+  // Greyscale once: the measurement and every jsQR pass work from this.
   const grey = image.greyscale();
-
   if (diagnostics) diagnostics.quality = measureQuality(grey);
+  return grey;
+}
 
+function runJsqrSweep(grey, diagnostics) {
+  const deadline = Date.now() + JSQR_BUDGET_MS;
   let passesRun = 0;
   for (const makePass of jsqrPasses(grey)) {
     if (Date.now() > deadline) {
@@ -295,24 +302,48 @@ async function decodeQrWithDiagnostics(input) {
   const buffer = Buffer.isBuffer(input) ? input : await fs.promises.readFile(input);
   const diagnostics = { bytes: buffer.length, decoder: null };
 
-  try {
-    const zxingStartedAt = Date.now();
-    const decoded = await decodeWithZXing(buffer);
-    diagnostics.zxingMs = Date.now() - zxingStartedAt;
-    if (decoded) {
-      diagnostics.decoder = 'zxing';
-      diagnostics.totalMs = Date.now() - startedAt;
-      return { text: decoded, diagnostics };
+  // Whether ZXing is available at all, which is a different question from
+  // whether it read this image - and the one that decides if jsQR runs.
+  let zxingUsable = await prepareZXing();
+
+  if (zxingUsable) {
+    try {
+      const zxingStartedAt = Date.now();
+      const decoded = await decodeWithZXing(buffer);
+      diagnostics.zxingMs = Date.now() - zxingStartedAt;
+      if (decoded) {
+        diagnostics.decoder = 'zxing';
+        diagnostics.totalMs = Date.now() - startedAt;
+        return { text: decoded, diagnostics };
+      }
+    } catch (err) {
+      // Not a decline - a fault. jsQR gets its turn after all.
+      zxingUsable = false;
+      diagnostics.zxingError = err.message;
+      logger.warn({ err: err.message }, 'ZXing decode failed, falling back to jsQR');
     }
-  } catch (err) {
-    // A decoder that cannot read this image must not fail the request: the
-    // slower one may still manage, and failing that the guest types it in.
-    diagnostics.zxingError = err.message;
-    logger.warn({ err: err.message }, 'ZXing decode failed, falling back to jsQR');
+  }
+
+  const grey = await describeSource(buffer, diagnostics);
+
+  // jsQR now runs only when ZXing could not, which is the case it was always
+  // for. It used to run on every image ZXing declined, and that cost two and a
+  // half seconds of every failed scan for nothing: on every image ever measured
+  // here ZXing read strictly more than the sweep did, so a symbol ZXing turned
+  // down was never once rescued by it. The seconds mattered because the failing
+  // path is the slow one - it is where the OCR fallback now runs, and where a
+  // guest is already waiting.
+  //
+  // The measurements above still happen on every failure. They are what turns
+  // "it didn't work" into something answerable, and they are cheap.
+  if (zxingUsable) {
+    diagnostics.jsqrSkipped = 'zxing-declined';
+    diagnostics.totalMs = Date.now() - startedAt;
+    return { text: null, diagnostics };
   }
 
   const jsqrStartedAt = Date.now();
-  const decoded = await decodeWithJsQr(buffer, diagnostics);
+  const decoded = runJsqrSweep(grey, diagnostics);
   diagnostics.jsqrMs = Date.now() - jsqrStartedAt;
   diagnostics.totalMs = Date.now() - startedAt;
   if (decoded) diagnostics.decoder = 'jsqr';
