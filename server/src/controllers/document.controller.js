@@ -49,6 +49,41 @@ function clientQrText(req) {
   return trimmed && trimmed.length <= MAX_CLIENT_QR_CHARS ? trimmed : null;
 }
 
+// Runs the OCR fallback on a card whose QR could not be read, records how it
+// went, and changes nothing the guest sees.
+//
+// A measurement, deliberately: the decision about where this code lives is a
+// timing question, and the honest way to answer it is real uploads rather than
+// a card chosen because it happened to be on hand. Logged per region are the
+// duration, tesseract's confidence, and whether anything was found - never the
+// text itself, which is the guest's name and address.
+//
+// Enabled only when OCR_SPIKE is set, so this cannot quietly become a permanent
+// cost on a path that is already the slow one.
+//
+// Required lazily. tesseract pulls in a worker and a 5MB model, and a guest
+// whose QR read on the first pass should not pay to load either.
+async function measureOcrFallback(buffer, documentKey) {
+  if (!process.env.OCR_SPIKE) return;
+
+  try {
+    const { tryReadCardText } = require('../services/aadhaarOcr.service');
+    const result = await tryReadCardText(buffer);
+    if (!result) return;
+
+    const regions = Object.fromEntries(
+      Object.entries(result.found).map(([name, r]) => [
+        name,
+        { found: r.text.length > 0, chars: r.text.length, confidence: r.confidence },
+      ])
+    );
+    logger.info({ documentKey, ...result.timings, regions }, 'OCR fallback measured');
+  } catch (err) {
+    // The spike must never be why a guest's upload fails.
+    logger.warn({ err: err.message, documentKey }, 'OCR fallback threw');
+  }
+}
+
 // A failed scan is never an error condition. The guest can always type their
 // details in, so every path below returns 200 with whatever we managed to read.
 async function scan(req, res) {
@@ -88,6 +123,8 @@ async function scan(req, res) {
     // apart from "the symbol was too small to resolve" - and without it, a
     // report of "the scan didn't work" is unanswerable.
     logger.info({ documentKey, ...(diagnostics || {}) }, 'No QR found in uploaded image');
+
+    await measureOcrFallback(req.file.buffer, documentKey);
 
     return res.json({ documentKey, fields: null, message: NO_QR_MESSAGE });
   }

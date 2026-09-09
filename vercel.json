@@ -9,7 +9,8 @@
   ],
   "functions": {
     "api/**": {
-      "includeFiles": "server/node_modules/zxing-wasm/dist/reader/*.wasm"
+      "includeFiles": "server/{node_modules/zxing-wasm/dist/reader/*.wasm,tessdata/*}",
+      "maxDuration": 60
     }
   },
   "routes": [
