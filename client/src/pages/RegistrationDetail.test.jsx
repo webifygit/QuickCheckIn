@@ -37,12 +37,13 @@ function mockDetail(overrides = {}) {
   );
 }
 
-// The image is streamed through an authenticated route, not a public URL.
+// The images are streamed through an authenticated route, not a public URL.
+// Each side is its own request, addressed by name rather than by storage key.
 function mockDocument() {
   const requests = [];
   server.use(
-    http.get(`${API}/api/registrations/reg_1/document`, ({ request }) => {
-      requests.push(request.headers.get('authorization'));
+    http.get(`${API}/api/registrations/reg_1/document/:side`, ({ request, params }) => {
+      requests.push({ side: params.side, auth: request.headers.get('authorization') });
       return new HttpResponse(new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])]), {
         headers: { 'Content-Type': 'image/png' },
       });
@@ -77,9 +78,21 @@ describe('RegistrationDetail', () => {
     expect(await screen.findByDisplayValue('Asha Kulkarni')).toBeInTheDocument();
     expect(screen.getByDisplayValue('XXXX XXXX 1234')).toBeInTheDocument();
 
-    expect(await screen.findByAltText(/uploaded identity document/i)).toBeInTheDocument();
+    expect(await screen.findByAltText(/uploaded identity document, front/i)).toBeInTheDocument();
     await waitFor(() => expect(documentRequests).toHaveLength(1));
-    expect(documentRequests[0]).toBe('Bearer staff-token');
+    expect(documentRequests[0]).toEqual({ side: 'front', auth: 'Bearer staff-token' });
+  });
+
+  it('fetches both sides when the guest supplied a back photo', async () => {
+    loginAsStaff();
+    mockDetail({ hasIdDocumentBack: true });
+    const documentRequests = mockDocument();
+
+    renderDetail();
+
+    expect(await screen.findByAltText(/uploaded identity document, back/i)).toBeInTheDocument();
+    await waitFor(() => expect(documentRequests).toHaveLength(2));
+    expect(documentRequests.map((entry) => entry.side).sort()).toEqual(['back', 'front']);
   });
 
   it('never receives the storage key for the image', async () => {
@@ -100,7 +113,7 @@ describe('RegistrationDetail', () => {
 
     renderDetail();
 
-    expect(await screen.findByText(/no id photo was uploaded/i)).toBeInTheDocument();
+    expect((await screen.findAllByText(/no photo of this side/i)).length).toBe(2);
     expect(screen.queryByAltText(/uploaded identity document/i)).not.toBeInTheDocument();
   });
 

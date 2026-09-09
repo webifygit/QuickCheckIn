@@ -544,6 +544,16 @@
   cursor: progress;
 }
 
+.uploader--invalid {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.uploader__optional {
+  font-weight: 500;
+  color: var(--text-subtle);
+}
+
 .uploader input[type='file'] {
   position: absolute;
   inset: 0;

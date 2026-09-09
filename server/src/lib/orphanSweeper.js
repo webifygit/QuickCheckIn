@@ -20,12 +20,20 @@ async function sweepOrphanedUploads() {
   const candidates = stored.filter((entry) => entry.modifiedAt && entry.modifiedAt < cutoff);
   if (candidates.length === 0) return { scanned: stored.length, deleted: 0 };
 
-  // One query for the whole batch rather than a lookup per file.
+  // One query for the whole batch rather than a lookup per file. Both sides
+  // have to be asked about: a registration referencing an image only as its back
+  // would otherwise look unreferenced, and the sweeper would delete a guest's
+  // address page out from under a reviewer.
+  const keys = candidates.map((entry) => entry.key);
   const referenced = await prisma.registration.findMany({
-    where: { idDocumentKey: { in: candidates.map((entry) => entry.key) } },
-    select: { idDocumentKey: true },
+    where: {
+      OR: [{ idDocumentKey: { in: keys } }, { idDocumentBackKey: { in: keys } }],
+    },
+    select: { idDocumentKey: true, idDocumentBackKey: true },
   });
-  const referencedKeys = new Set(referenced.map((row) => row.idDocumentKey));
+  const referencedKeys = new Set(
+    referenced.flatMap((row) => [row.idDocumentKey, row.idDocumentBackKey]).filter(Boolean)
+  );
 
   let deleted = 0;
   for (const entry of candidates) {

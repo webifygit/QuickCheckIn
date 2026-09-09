@@ -21,7 +21,10 @@ router.get('/', staffOnly, list);
 router.get('/:id', staffOnly, getOne);
 router.patch('/:id', staffOnly, update);
 
-// The only route that returns an uploaded ID image, and it requires a staff token.
+// The only routes that return an uploaded ID image, and both require a staff
+// token. The bare path stays as the front, which is what every client asking
+// before there was a back side meant by it.
 router.get('/:id/document', staffOnly, getDocument);
+router.get('/:id/document/:side', staffOnly, getDocument);
 
 module.exports = router;

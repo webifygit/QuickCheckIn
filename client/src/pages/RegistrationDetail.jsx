@@ -115,9 +115,9 @@ export default function RegistrationDetail() {
   function decide(status) {
     if (
       PURGES_DOCUMENT.has(status) &&
-      registration?.hasIdDocument &&
+      (registration?.hasIdDocument || registration?.hasIdDocumentBack) &&
       !window.confirm(
-        `Marking this ${STATUS_LABELS[status].toLowerCase()} will permanently delete the guest's ID photo. Continue?`
+        `Marking this ${STATUS_LABELS[status].toLowerCase()} will permanently delete the guest's ID photos. Continue?`
       )
     ) {
       return;
@@ -317,11 +317,34 @@ export default function RegistrationDetail() {
               <h2 id="document-heading" className="card__title">
                 Identity document
               </h2>
-              <IdDocumentPreview
-                registrationId={id}
-                hasDocument={registration.hasIdDocument}
-                deletedAt={registration.idDocumentDeletedAt}
-              />
+              {/* Deletion is a single event covering both sides, so it is
+                * reported once here rather than twice by the previews. */}
+              {registration.idDocumentDeletedAt ? (
+                <Alert tone="info">
+                  The ID photos were deleted on{' '}
+                  {new Date(registration.idDocumentDeletedAt).toLocaleDateString()}, once this
+                  registration was reviewed.
+                </Alert>
+              ) : (
+                <>
+                  <div className="stack stack--tight">
+                    <p className="section-label">Front</p>
+                    <IdDocumentPreview
+                      registrationId={id}
+                      side="front"
+                      hasDocument={registration.hasIdDocument}
+                    />
+                  </div>
+                  <div className="stack stack--tight">
+                    <p className="section-label">Back</p>
+                    <IdDocumentPreview
+                      registrationId={id}
+                      side="back"
+                      hasDocument={registration.hasIdDocumentBack}
+                    />
+                  </div>
+                </>
+              )}
             </section>
 
             <section className="card stack" aria-labelledby="review-heading">
@@ -329,9 +352,9 @@ export default function RegistrationDetail() {
                 Review
               </h2>
 
-              {registration.hasIdDocument && (
+              {(registration.hasIdDocument || registration.hasIdDocumentBack) && (
                 <Alert tone="warning">
-                  Approving, checking in or rejecting permanently deletes the guest's ID photo.
+                  Approving, checking in or rejecting permanently deletes the guest's ID photos.
                 </Alert>
               )}
 

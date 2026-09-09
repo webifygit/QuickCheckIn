@@ -38,6 +38,27 @@ describe('the scheduled orphan sweep', () => {
     expect(storage.remove).not.toHaveBeenCalledWith('attached.png');
   });
 
+  // An image referenced only as a registration's back side is still referenced.
+  // Sweeping it would delete a guest's address page out from under a reviewer,
+  // silently, hours after they submitted it.
+  it('leaves an image alone when a registration holds it as its back side', async () => {
+    storage.list.mockResolvedValue([
+      { key: 'orphan.png', modifiedAt: OLD },
+      { key: 'back-only.png', modifiedAt: OLD },
+    ]);
+    prisma.registration.findMany.mockResolvedValue([
+      { idDocumentKey: 'some-front.png', idDocumentBackKey: 'back-only.png' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/maintenance/sweep-orphans')
+      .set('Authorization', `Bearer ${SECRET}`);
+
+    expect(res.body).toMatchObject({ ok: true, deleted: 1 });
+    expect(storage.remove).toHaveBeenCalledWith('orphan.png');
+    expect(storage.remove).not.toHaveBeenCalledWith('back-only.png');
+  });
+
   // Vercel Cron issues GET, so the endpoint has to answer one.
   it('runs from a GET, which is what the scheduler sends', async () => {
     const res = await request(app)

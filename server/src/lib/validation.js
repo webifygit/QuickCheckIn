@@ -84,6 +84,10 @@ const baseFields = {
     blankToNull,
     z.string().regex(STORAGE_KEY_RE, 'Invalid document reference').nullable().optional()
   ),
+  idDocumentBackKey: z.preprocess(
+    blankToNull,
+    z.string().regex(STORAGE_KEY_RE, 'Invalid document reference').nullable().optional()
+  ),
 };
 
 // A stay cannot end before it starts. Checked on create, and on update against
@@ -159,12 +163,13 @@ const createRegistrationSchema = z
 // field a guest filled in stays editable so a mis-scanned detail can be
 // corrected - with two exceptions, which are dropped from baseFields here:
 //
-//   idDocumentKey - a staff PATCH could otherwise re-point a record at another
-//     guest's stored image, or resurrect one the review flow had just purged.
-//     The key is set once, by the scan endpoint that minted it.
+//   idDocumentKey, idDocumentBackKey - a staff PATCH could otherwise re-point a
+//     record at another guest's stored image, or resurrect one the review flow
+//     had just purged. The keys are set once, by the scan endpoint that minted
+//     them.
 //   consentGiven  - a record of something the guest did. Staff correcting a
 //     mis-scanned address must not be able to rewrite it.
-const STAFF_IMMUTABLE_FIELDS = ['idDocumentKey', 'consentGiven'];
+const STAFF_IMMUTABLE_FIELDS = ['idDocumentKey', 'idDocumentBackKey', 'consentGiven'];
 
 function buildUpdateSchema(existing = {}) {
   const optionalBase = Object.fromEntries(

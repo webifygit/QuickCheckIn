@@ -110,6 +110,65 @@ describe('ID images are purged once a reviewer has decided', () => {
     }
   );
 
+  // Half a purge is worse than none: the row would claim disposal while a
+  // guest's address page was still sitting in the bucket.
+  it('deletes both sides, not just the front', async () => {
+    const front = await storage.save(Buffer.from('pretend-front'), 'image/png');
+    const back = await storage.save(Buffer.from('pretend-back'), 'image/png');
+    prisma.registration.findUnique.mockResolvedValue({
+      id: 'reg_1',
+      status: 'PENDING',
+      idDocumentKey: front,
+      idDocumentBackKey: back,
+    });
+
+    const res = await auth(request(app).patch('/api/registrations/reg_1').send({ status: 'APPROVED' }));
+
+    expect(res.status).toBe(200);
+    const { data } = prisma.registration.update.mock.calls[0][0];
+    expect(data.idDocumentKey).toBeNull();
+    expect(data.idDocumentBackKey).toBeNull();
+    expect(await storage.read(front)).toBeNull();
+    expect(await storage.read(back)).toBeNull();
+  });
+
+  // A guest with a PAN card, or only one side of anything, still gets reviewed.
+  it('purges a registration that has only a front image', async () => {
+    const front = await storage.save(Buffer.from('pretend-front'), 'image/png');
+    prisma.registration.findUnique.mockResolvedValue({
+      id: 'reg_1',
+      status: 'PENDING',
+      idDocumentKey: front,
+      idDocumentBackKey: null,
+    });
+
+    await auth(request(app).patch('/api/registrations/reg_1').send({ status: 'APPROVED' }));
+
+    const { data } = prisma.registration.update.mock.calls[0][0];
+    expect(data.idDocumentKey).toBeNull();
+    expect(data).not.toHaveProperty('idDocumentBackKey');
+    expect(await storage.read(front)).toBeNull();
+  });
+
+  it('serves the back side through its own named route', async () => {
+    const back = await storage.save(Buffer.from('pretend-back'), 'image/png');
+    prisma.registration.findUnique.mockResolvedValue({ id: 'reg_1', idDocumentBackKey: back });
+
+    const res = await auth(request(app).get('/api/registrations/reg_1/document/back'));
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('image/png');
+  });
+
+  // The side is a name, not a key, so nothing a caller invents reaches storage.
+  it('refuses a side it does not know', async () => {
+    prisma.registration.findUnique.mockResolvedValue({ id: 'reg_1', idDocumentKey: 'x.png' });
+
+    const res = await auth(request(app).get('/api/registrations/reg_1/document/sideways'));
+
+    expect(res.status).toBe(404);
+  });
+
   it('keeps the image while the registration is still pending', async () => {
     const key = await storage.save(Buffer.from('pretend-image'), 'image/png');
     prisma.registration.findUnique.mockResolvedValue({

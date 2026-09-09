@@ -5,7 +5,12 @@ import Alert from '../components/Alert';
 // The ID image is not a public URL - it is streamed through an authenticated
 // route. So it cannot go straight into an <img src>; it has to be fetched with
 // the staff token attached and turned into a blob URL.
-export default function IdDocumentPreview({ registrationId, hasDocument, deletedAt }) {
+export default function IdDocumentPreview({
+  registrationId,
+  hasDocument,
+  deletedAt,
+  side = 'front',
+}) {
   const [objectUrl, setObjectUrl] = useState(null);
   // Starting at 'loading' when there is something to load keeps the first paint
   // honest and avoids a state write during the effect.
@@ -20,7 +25,7 @@ export default function IdDocumentPreview({ registrationId, hasDocument, deleted
 
     async function load() {
       try {
-        const { data } = await api.get(`/api/registrations/${registrationId}/document`, {
+        const { data } = await api.get(`/api/registrations/${registrationId}/document/${side}`, {
           responseType: 'blob',
           signal: controller.signal,
         });
@@ -42,7 +47,7 @@ export default function IdDocumentPreview({ registrationId, hasDocument, deleted
       // Blob URLs are held by the document until explicitly released.
       if (created) URL.revokeObjectURL(created);
     };
-  }, [registrationId, hasDocument]);
+  }, [registrationId, hasDocument, side]);
 
   if (deletedAt) {
     return (
@@ -54,7 +59,7 @@ export default function IdDocumentPreview({ registrationId, hasDocument, deleted
   }
 
   if (!hasDocument) {
-    return <p className="field__hint">No ID photo was uploaded with this registration.</p>;
+    return <p className="field__hint">No photo of this side was uploaded.</p>;
   }
 
   if (state === 'loading') {
@@ -65,5 +70,5 @@ export default function IdDocumentPreview({ registrationId, hasDocument, deleted
     return <Alert tone="warning">{message}</Alert>;
   }
 
-  return <img src={objectUrl} alt="Uploaded identity document" className="doc-preview" />;
+  return <img src={objectUrl} alt={`Uploaded identity document, ${side}`} className="doc-preview" />;
 }

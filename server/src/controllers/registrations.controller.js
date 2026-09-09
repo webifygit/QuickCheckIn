@@ -9,13 +9,25 @@ const {
   stripUndefined,
 } = require('../lib/validation');
 
-// The stored document key is an internal detail. Leaking it would let anyone
-// holding it request the image, so it never crosses the API boundary - the
-// client asks for /:id/document instead and gets the bytes through staff auth.
+// The stored document keys are an internal detail. Leaking one would let anyone
+// holding it request the image, so they never cross the API boundary - the
+// client asks for /:id/document/:side instead and gets the bytes through staff
+// auth.
 function toPublicRegistration(registration) {
-  const { idDocumentKey, ...rest } = registration;
-  return { ...rest, hasIdDocument: Boolean(idDocumentKey) };
+  const { idDocumentKey, idDocumentBackKey, ...rest } = registration;
+  return {
+    ...rest,
+    hasIdDocument: Boolean(idDocumentKey),
+    hasIdDocumentBack: Boolean(idDocumentBackKey),
+  };
 }
+
+// Which column each side lives in. The route takes a side name rather than a
+// key, so nothing a caller sends is ever used to address storage directly.
+const DOCUMENT_SIDES = {
+  front: 'idDocumentKey',
+  back: 'idDocumentBackKey',
+};
 
 // Statuses at which the guest's ID image has served its purpose. Keeping the
 // image past this point is the single largest piece of risk in the system, so
@@ -82,18 +94,28 @@ async function update(req, res, next) {
     data.reviewedAt = new Date();
   }
 
-  // Purge the ID image on the review decision, and record when. Done before the
+  // Purge the ID images on the review decision, and record when. Done before the
   // write so a storage failure cannot leave the row claiming a deleted image
   // that is in fact still sitting in the bucket.
-  const shouldPurge =
-    data.status && PURGE_AT_STATUSES.has(data.status) && existing.idDocumentKey;
+  //
+  // Both sides go together, and a failure on either abandons the whole status
+  // change. Purging one and keeping the other would leave a record claiming
+  // disposal while half a guest's ID is still stored - the exact thing the
+  // deleted-at timestamp is supposed to promise did not happen.
+  const storedSides = Object.entries(DOCUMENT_SIDES).filter(([, column]) => existing[column]);
+  const shouldPurge = data.status && PURGE_AT_STATUSES.has(data.status) && storedSides.length > 0;
 
   if (shouldPurge) {
     try {
-      await storage.remove(existing.idDocumentKey);
-      data.idDocumentKey = null;
+      for (const [, column] of storedSides) {
+        await storage.remove(existing[column]);
+        data[column] = null;
+      }
       data.idDocumentDeletedAt = new Date();
-      logger.info({ registrationId: existing.id }, 'ID document purged after review');
+      logger.info(
+        { registrationId: existing.id, sides: storedSides.map(([side]) => side) },
+        'ID documents purged after review'
+      );
     } catch (err) {
       logger.error({ err: err.message, registrationId: existing.id }, 'ID document purge failed');
       return res.status(502).json({
@@ -113,13 +135,20 @@ async function update(req, res, next) {
   }
 }
 
-// Streams the ID image to signed-in staff. This is the only way to read one:
+// Streams an ID image to signed-in staff. This is the only way to read one:
 // there is no static path and no public URL.
+//
+// The side is named, not keyed - "front" or "back" and nothing else reaches
+// storage, so a caller cannot ask for an object by guessing at a key.
 async function getDocument(req, res) {
+  const column = DOCUMENT_SIDES[req.params.side || 'front'];
+  if (!column) return res.status(404).json({ error: 'Not found' });
+
   const registration = await prisma.registration.findUnique({ where: { id: req.params.id } });
   if (!registration) return res.status(404).json({ error: 'Not found' });
 
-  if (!registration.idDocumentKey) {
+  const key = registration[column];
+  if (!key) {
     return res.status(404).json({
       error: registration.idDocumentDeletedAt
         ? 'The ID image was deleted after this registration was reviewed.'
@@ -127,13 +156,13 @@ async function getDocument(req, res) {
     });
   }
 
-  const buffer = await storage.read(registration.idDocumentKey);
+  const buffer = await storage.read(key);
   if (!buffer) {
     logger.warn({ registrationId: registration.id }, 'Document key present but object missing');
     return res.status(404).json({ error: 'The stored ID image could not be found.' });
   }
 
-  const extension = registration.idDocumentKey.split('.').pop();
+  const extension = key.split('.').pop();
   const contentType =
     { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' }[extension] || 'application/octet-stream';
 

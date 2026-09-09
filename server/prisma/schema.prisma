@@ -63,10 +63,22 @@ model Registration {
   vehicleNumber  String?
   numberOfGuests Int     @default(1)
 
-  // Opaque key into the storage driver - not a URL and not a filesystem path.
-  // The image is purged once staff approve, and idDocumentDeletedAt records that
-  // it existed and was disposed of, which is what an audit actually needs.
+  // Opaque keys into the storage driver - not URLs and not filesystem paths.
+  //
+  // Two sides, because one photo cannot do both jobs. An Aadhaar card carries
+  // the name, photo and date of birth on the front and the address on the back,
+  // and a front desk checking a guest in needs to see both. A single frame
+  // holding both sides gives each of them half the pixels, which is what makes
+  // a printed address unreadable at review time.
+  //
+  // The back is optional: a guest holding a PAN card, or one side of anything,
+  // must still be able to finish.
+  //
+  // Both are purged together once staff approve, and idDocumentDeletedAt records
+  // that they existed and were disposed of - which is what an audit needs. One
+  // timestamp covers both because there is only ever one disposal.
   idDocumentKey       String?
+  idDocumentBackKey   String?
   idDocumentDeletedAt DateTime?
 
   status       RegistrationStatus @default(PENDING)

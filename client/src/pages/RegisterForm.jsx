@@ -4,6 +4,7 @@ import Field from '../components/Field';
 import Alert from '../components/Alert';
 import Spinner from '../components/Spinner';
 import QrCamera from '../components/QrCamera';
+import IdUploader from '../components/IdUploader';
 
 // Older browsers, and any context that is not secure, have no camera to offer.
 // Checked once at module load so the button is simply absent rather than
@@ -31,15 +32,22 @@ const EMPTY_FORM = {
 
 const AUTOFILLED_FIELDS = ['fullName', 'dob', 'gender', 'idNumber', 'address'];
 
+const EMPTY_SIDES = {
+  front: { key: null, previewUrl: null, fileName: '' },
+  back: { key: null, previewUrl: null, fileName: '' },
+};
+
 export default function RegisterForm() {
   const [form, setForm] = useState(EMPTY_FORM);
-  const [documentKey, setDocumentKey] = useState(null);
-  const [previewUrl, setPreviewUrl] = useState(null);
-  const [fileName, setFileName] = useState('');
-  const [scanning, setScanning] = useState(false);
+  // One entry per side of the card. The front is what a guest is asked for; the
+  // back holds the address, which the front desk needs and the front does not
+  // carry.
+  const [sides, setSides] = useState(EMPTY_SIDES);
+  // Which side is mid-upload, or null. Held as a side rather than a boolean so
+  // only the slot being read shows a spinner.
+  const [scanningSide, setScanningSide] = useState(null);
   const [scan, setScan] = useState(null); // { tone, message }
   const [autofilled, setAutofilled] = useState([]);
-  const [dragging, setDragging] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -51,14 +59,28 @@ export default function RegisterForm() {
 
   const errorRef = useRef(null);
   const formRef = useRef(null);
+  // Read only by the unmount cleanup, which must see the latest previews rather
+  // than the ones captured when the effect was created.
+  const sidesRef = useRef(sides);
+  const autofilledRef = useRef(autofilled);
 
-  // Revoke the object URL when it is replaced or the page unmounts, otherwise
-  // each re-photograph leaks the previous image's memory.
+  // Kept in step after each render rather than during it. Everything that reads
+  // these does so from an event handler or a cleanup, both of which run after
+  // the effect has caught up.
+  useEffect(() => {
+    sidesRef.current = sides;
+    autofilledRef.current = autofilled;
+  }, [sides, autofilled]);
+
+  // Release every preview the page still holds when it unmounts. Replacements
+  // are revoked as they happen, in setSide.
   useEffect(() => {
     return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      for (const side of Object.values(sidesRef.current)) {
+        if (side.previewUrl) URL.revokeObjectURL(side.previewUrl);
+      }
     };
-  }, [previewUrl]);
+  }, []);
 
   // Move focus to whatever needs fixing, once the render carrying the new errors
   // has committed - querying the DOM inside the submit handler would run before
@@ -87,18 +109,38 @@ export default function RegisterForm() {
     setAutofilled((fields) => fields.filter((name) => name !== key));
   }
 
-  // One path for both ways in. The camera arrives having already read the QR and
-  // passes its text along; an uploaded file passes null and the server does the
-  // reading. Everything after the response is identical, so it lives here once.
-  async function submitScan(file, qrText) {
-    setPreviewUrl((old) => {
-      if (old) URL.revokeObjectURL(old);
-      return URL.createObjectURL(file);
+  // Replaces one slot, revoking whatever preview it held. Every write to `sides`
+  // goes through here so a replaced photo cannot leak its object URL.
+  function setSide(side, changes) {
+    setSides((current) => {
+      const previous = current[side];
+      if (changes.previewUrl !== undefined && previous.previewUrl) {
+        URL.revokeObjectURL(previous.previewUrl);
+      }
+      return { ...current, [side]: { ...previous, ...changes } };
     });
-    setFileName(file.name);
-    setScanning(true);
+  }
+
+  // One path for every way in. The camera arrives having already read the QR and
+  // passes its text along; an uploaded file passes null and the server does the
+  // reading. Either side of the card can auto-fill - many Aadhaar cards carry a
+  // QR on both - so the response is handled the same whichever slot it came
+  // from.
+  async function submitScan(file, qrText, side) {
+    // Read through the ref: handleScanned is created once, so its closure holds
+    // the first render's value of this and would always see it as empty.
+    const alreadyFilled = autofilledRef.current.length > 0;
+
+    setSide(side, { previewUrl: URL.createObjectURL(file), fileName: file.name });
+    setScanningSide(side);
     setScan(null);
     setError('');
+    setFieldErrors((errors) => {
+      if (!errors.idDocument) return errors;
+      const next = { ...errors };
+      delete next.idDocument;
+      return next;
+    });
 
     try {
       const body = new FormData();
@@ -109,7 +151,7 @@ export default function RegisterForm() {
       if (qrText) body.append('qrText', qrText);
       const { data } = await api.post('/api/document/scan', body);
 
-      setDocumentKey(data.documentKey || null);
+      setSide(side, { key: data.documentKey || null });
 
       if (data.fields) {
         const filled = [];
@@ -129,7 +171,11 @@ export default function RegisterForm() {
           message:
             'We read your Aadhaar QR code and filled in the details below. Please check them and correct anything that looks wrong.',
         });
-      } else {
+      } else if (!alreadyFilled) {
+        // Only worth saying when nothing has filled the form yet. Once the
+        // details are in, a second photo that happens to carry no readable code
+        // has cost the guest nothing, and telling them it "couldn't be read"
+        // reads as a problem they need to go and fix.
         setScan({
           tone: 'warning',
           message: data.message || "We couldn't read this image. Please fill the form in yourself.",
@@ -144,28 +190,28 @@ export default function RegisterForm() {
         message: `${message} You can fill the form in yourself.`,
       });
     } finally {
-      setScanning(false);
+      setScanningSide(null);
     }
   }
 
-  function handleFile(selected) {
-    if (selected) submitScan(selected, null);
+  function handleFile(side, selected) {
+    if (selected) submitScan(selected, null, side);
   }
 
   // Stable across renders: QrCamera holds the camera open for its whole life, so
   // a prop that changed every render would restart it constantly. Capturing the
   // first render's submitScan is safe because it reads no state - only setters,
   // which React keeps stable.
+  //
+  // The captured frame fills the front slot only when nothing is there yet. It
+  // is a close-up of the code, not a picture of a card, so it is a poor record
+  // of the front - but it beats an empty slot, and a guest who later uploads a
+  // proper photo replaces it.
   const handleScanned = useCallback(({ qrText, blob }) => {
     setCameraOpen(false);
-    submitScan(new File([blob], 'aadhaar-scan.jpg', { type: 'image/jpeg' }), qrText);
+    const file = new File([blob], 'aadhaar-scan.jpg', { type: 'image/jpeg' });
+    submitScan(file, qrText, sidesRef.current.front.key ? 'back' : 'front');
   }, []);
-
-  function handleDrop(e) {
-    e.preventDefault();
-    setDragging(false);
-    handleFile(e.dataTransfer.files?.[0]);
-  }
 
   // The form sets noValidate so errors render in the page's own style rather
   // than as browser bubbles - which means the required fields are checked here.
@@ -174,6 +220,10 @@ export default function RegisterForm() {
     const errors = {};
     if (!form.fullName.trim()) errors.fullName = 'Please enter your full name';
     if (!form.phone.trim()) errors.phone = 'Please enter a phone number';
+    // The record the hotel is required to keep starts with a picture of the ID.
+    // The back is not demanded: a guest holding a PAN card, or one side of
+    // anything, must still be able to check in.
+    if (!sides.front.key) errors.idDocument = 'Please add a photo of the front of your ID';
     if (!form.consentGiven) errors.consentGiven = 'Required';
     return errors;
   }
@@ -197,7 +247,11 @@ export default function RegisterForm() {
 
     setSubmitting(true);
     try {
-      await api.post('/api/registrations', { ...form, idDocumentKey: documentKey });
+      await api.post('/api/registrations', {
+        ...form,
+        idDocumentKey: sides.front.key,
+        idDocumentBackKey: sides.back.key,
+      });
       setSubmitted(true);
     } catch (err) {
       const described = describeError(err, 'Submission failed. Please try again.');
@@ -257,67 +311,52 @@ export default function RegisterForm() {
                  * one attempt at a symbol that needs to fill the frame; the
                  * camera has one per frame and can say "closer" while the card
                  * is still in the guest's hand. */}
+                {/* The camera fills the form; the two slots below are the
+                  * record. Separated because they are different jobs: reading a
+                  * dense QR needs the code to fill the frame, while a record a
+                  * reviewer can read needs the whole card in it. One photo
+                  * cannot do both, which is why asking for one was failing. */}
                 {CAMERA_SUPPORTED && (
-                  <button
-                    type="button"
-                    className="btn btn--block"
-                    onClick={() => setCameraOpen(true)}
-                    disabled={scanning}
-                  >
-                    Scan my Aadhaar QR code
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn--block"
+                      onClick={() => setCameraOpen(true)}
+                      disabled={Boolean(scanningSide)}
+                    >
+                      Scan my Aadhaar QR code
+                    </button>
+                    <p className="uploader__hint">
+                      Fills your details in automatically. You still need photos of the card below.
+                    </p>
+                  </>
                 )}
 
-                <div
-                  className={`uploader${dragging ? ' uploader--dragging' : ''}${
-                    scanning ? ' uploader--busy' : ''
-                  }`}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setDragging(true);
-                  }}
-                  onDragLeave={() => setDragging(false)}
-                  onDrop={handleDrop}
-                >
-                  <input
-                    type="file"
-                    id="document"
-                    accept="image/jpeg,image/png,image/webp"
-                    onChange={(e) => handleFile(e.target.files?.[0])}
-                    disabled={scanning}
-                    aria-describedby="upload-hint"
-                  />
+                <IdUploader
+                  id="document-front"
+                  label="Front of your ID"
+                  hint="The side with your photo and name. Fit the whole card in the frame."
+                  invalid={Boolean(fieldErrors.idDocument)}
+                  busy={scanningSide === 'front'}
+                  preview={sides.front.previewUrl}
+                  fileName={sides.front.fileName}
+                  onFile={(file) => handleFile('front', file)}
+                />
 
-                  {previewUrl ? (
-                    <div className="uploader__preview">
-                      <img src={previewUrl} alt="" className="uploader__thumb" />
-                      <div>
-                        <p className="uploader__title">{fileName}</p>
-                        <p className="uploader__hint" id="upload-hint">
-                          {scanning ? 'Reading your card…' : 'Tap to choose a different photo'}
-                        </p>
-                      </div>
-                      {scanning && <Spinner label="Reading your card" />}
-                    </div>
-                  ) : (
-                    <>
-                      <div className="uploader__icon" aria-hidden="true">
-                        ⬆
-                      </div>
-                      <p className="uploader__title">
-                        <label htmlFor="document">
-                          {CAMERA_SUPPORTED
-                            ? 'Or upload a photo instead'
-                            : 'Upload a photo of your Aadhaar card'}
-                        </label>
-                      </p>
-                      <p className="uploader__hint" id="upload-hint">
-                        Photograph the QR code on its own, close enough to fill the frame. Using a
-                        different ID? Upload it anyway and fill in the details below.
-                      </p>
-                    </>
-                  )}
-                </div>
+                <IdUploader
+                  id="document-back"
+                  label="Back of your ID"
+                  optional
+                  hint="The side with your address. Skip this if your ID has nothing on the back."
+                  busy={scanningSide === 'back'}
+                  preview={sides.back.previewUrl}
+                  fileName={sides.back.fileName}
+                  onFile={(file) => handleFile('back', file)}
+                />
+
+                {fieldErrors.idDocument && (
+                  <p className="field__error">{fieldErrors.idDocument}</p>
+                )}
               </>
             )}
 
@@ -509,7 +548,7 @@ export default function RegisterForm() {
             <button
               type="submit"
               className="btn btn--lg btn--block"
-              disabled={submitting || scanning}
+              disabled={submitting || Boolean(scanningSide)}
             >
               {submitting ? (
                 <>
