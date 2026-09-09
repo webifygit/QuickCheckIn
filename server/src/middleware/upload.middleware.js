@@ -34,7 +34,11 @@ function detectImageMime(buffer) {
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: config.MAX_UPLOAD_BYTES, files: 1, fields: 10 },
+  // fieldSize bounds the one text field this endpoint takes - a QR's decoded
+  // text, from the client-side scanner. A real secure QR runs to a few thousand
+  // digits; 16KB leaves room without letting a caller hand the parser a payload
+  // whose cost is superlinear in its length.
+  limits: { fileSize: config.MAX_UPLOAD_BYTES, files: 1, fields: 10, fieldSize: 16 * 1024 },
   fileFilter: (req, file, cb) => {
     if (!ALLOWED_MIME_TYPES.has(file.mimetype)) {
       return cb(new multer.MulterError('LIMIT_UNEXPECTED_FILE', 'document'));
@@ -51,6 +55,12 @@ function handleUploadErrors(err, req, res, next) {
     if (err.code === 'LIMIT_FILE_SIZE') {
       const limitMb = Math.round(config.MAX_UPLOAD_BYTES / (1024 * 1024));
       return res.status(413).json({ error: `That image is too large. Please upload a photo under ${limitMb}MB.` });
+    }
+    // An oversized text field is not something a guest can cause through the
+    // form, so this message is for whoever is holding the request - not for a
+    // guest to act on. The default below would have blamed their photo.
+    if (err.code === 'LIMIT_FIELD_VALUE') {
+      return res.status(400).json({ error: 'A form field was too large to accept.' });
     }
     return res.status(400).json({ error: 'Please upload a single JPEG, PNG or WEBP image.' });
   }

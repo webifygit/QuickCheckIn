@@ -15,6 +15,29 @@ const NO_QR_MESSAGE =
 const NOT_AADHAAR_MESSAGE =
   "We found a QR code, but not an Aadhaar one, so there was nothing to fill in from it. Your photo has been saved for the front desk — please fill in the details below.";
 
+// The client may have read the QR itself, off a live camera, and send its text
+// alongside the photo (see client/src/components/QrCamera.jsx). Two things are
+// worth being clear about.
+//
+// Trust: this text is guest-supplied, and so is every field on the form the
+// guest types by hand. Accepting it grants no capability that typing did not
+// already grant. What must not move is the parsing - parseAadhaarQr is where
+// the Aadhaar number is reduced to its last four digits, and running it here
+// keeps that guarantee out of reach of the browser. The client sends QR text,
+// never fields.
+//
+// Size: a QR's text is the one input a caller controls the length of, and the
+// parser's cost is superlinear in it. Bounded by multer's fieldSize, and again
+// here, so an implausible value is ignored rather than parsed.
+const MAX_CLIENT_QR_CHARS = 8_000;
+
+function clientQrText(req) {
+  const value = req.body?.qrText;
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed && trimmed.length <= MAX_CLIENT_QR_CHARS ? trimmed : null;
+}
+
 // A failed scan is never an error condition. The guest can always type their
 // details in, so every path below returns 200 with whatever we managed to read.
 async function scan(req, res) {
@@ -31,14 +54,21 @@ async function scan(req, res) {
 
   const documentKey = await storage.save(req.file.buffer, detectedMime);
 
-  let qrString = null;
-  let diagnostics = null;
-  try {
-    ({ text: qrString, diagnostics } = await decodeQrWithDiagnostics(req.file.buffer));
-  } catch (err) {
-    // Corrupt or hostile image data. The upload is still kept - staff can look
-    // at the photo even when the QR is unreadable.
-    logger.warn({ err: err.message, documentKey }, 'QR decode failed');
+  let qrString = clientQrText(req);
+  let diagnostics = qrString ? { decoder: 'client' } : null;
+
+  // Only decode here if the client did not. A frame that already yielded a QR
+  // in the browser holds nothing a second pass would find, and this is the
+  // expensive half of the request - a wasm init and up to 2.5s of jsQR budget,
+  // which on a serverless deployment is a cold start per guest.
+  if (!qrString) {
+    try {
+      ({ text: qrString, diagnostics } = await decodeQrWithDiagnostics(req.file.buffer));
+    } catch (err) {
+      // Corrupt or hostile image data. The upload is still kept - staff can look
+      // at the photo even when the QR is unreadable.
+      logger.warn({ err: err.message, documentKey }, 'QR decode failed');
+    }
   }
 
   if (!qrString) {

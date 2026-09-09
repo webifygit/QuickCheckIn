@@ -585,6 +585,71 @@
   flex-shrink: 0;
 }
 
+/* ---------------------------------------------------------- qr camera -- */
+
+.qr-camera {
+  position: relative;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: #000;
+  aspect-ratio: 3 / 4;
+}
+
+@media (min-width: 640px) {
+  .qr-camera {
+    aspect-ratio: 4 / 3;
+  }
+}
+
+.qr-camera__video {
+  width: 100%;
+  height: 100%;
+  /* Cover, so the preview is never letterboxed. The decode crops the native
+   * frame independently of this, but the box below has to sit over what the
+   * guest actually sees or the aiming guidance is a lie. */
+  object-fit: cover;
+  display: block;
+}
+
+/* The decode region, drawn at the same 72% of the shorter side that
+ * QrCamera.jsx crops. These two numbers have to move together. */
+.qr-camera__box {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  width: 72%;
+  aspect-ratio: 1;
+  border: 3px solid var(--text-on-accent);
+  border-radius: var(--radius);
+  box-shadow: 0 0 0 100vmax rgb(0 0 0 / 45%);
+}
+
+@media (min-width: 640px) {
+  .qr-camera__box {
+    /* Landscape: the shorter side is the height, so match against it. */
+    width: auto;
+    height: 72%;
+  }
+}
+
+.qr-camera__status {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #fff;
+}
+
+.qr-camera__hint {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  text-align: center;
+  max-width: 40ch;
+  margin: 0 auto;
+  min-height: 2.6em;
+}
+
 /* --------------------------------------------------------------- table -- */
 
 .table-wrap {

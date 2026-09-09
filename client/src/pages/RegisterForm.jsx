@@ -1,8 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import api, { describeError } from '../api/client';
 import Field from '../components/Field';
 import Alert from '../components/Alert';
 import Spinner from '../components/Spinner';
+import QrCamera from '../components/QrCamera';
+
+// Older browsers, and any context that is not secure, have no camera to offer.
+// Checked once at module load so the button is simply absent rather than
+// present and broken.
+const CAMERA_SUPPORTED =
+  typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getUserMedia);
 
 const EMPTY_FORM = {
   fullName: '',
@@ -33,6 +40,7 @@ export default function RegisterForm() {
   const [scan, setScan] = useState(null); // { tone, message }
   const [autofilled, setAutofilled] = useState([]);
   const [dragging, setDragging] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState('');
@@ -79,21 +87,26 @@ export default function RegisterForm() {
     setAutofilled((fields) => fields.filter((name) => name !== key));
   }
 
-  async function handleFile(selected) {
-    if (!selected) return;
-
+  // One path for both ways in. The camera arrives having already read the QR and
+  // passes its text along; an uploaded file passes null and the server does the
+  // reading. Everything after the response is identical, so it lives here once.
+  async function submitScan(file, qrText) {
     setPreviewUrl((old) => {
       if (old) URL.revokeObjectURL(old);
-      return URL.createObjectURL(selected);
+      return URL.createObjectURL(file);
     });
-    setFileName(selected.name);
+    setFileName(file.name);
     setScanning(true);
     setScan(null);
     setError('');
 
     try {
       const body = new FormData();
-      body.append('document', selected);
+      body.append('document', file);
+      // Never the parsed fields - only the QR's own text. Parsing it, and
+      // masking the Aadhaar number out of it, stays on the server where the
+      // guest's browser cannot decide to skip either step.
+      if (qrText) body.append('qrText', qrText);
       const { data } = await api.post('/api/document/scan', body);
 
       setDocumentKey(data.documentKey || null);
@@ -134,6 +147,19 @@ export default function RegisterForm() {
       setScanning(false);
     }
   }
+
+  function handleFile(selected) {
+    if (selected) submitScan(selected, null);
+  }
+
+  // Stable across renders: QrCamera holds the camera open for its whole life, so
+  // a prop that changed every render would restart it constantly. Capturing the
+  // first render's submitScan is safe because it reads no state - only setters,
+  // which React keeps stable.
+  const handleScanned = useCallback(({ qrText, blob }) => {
+    setCameraOpen(false);
+    submitScan(new File([blob], 'aadhaar-scan.jpg', { type: 'image/jpeg' }), qrText);
+  }, []);
 
   function handleDrop(e) {
     e.preventDefault();
@@ -211,8 +237,8 @@ export default function RegisterForm() {
         <header className="stack stack--tight">
           <h1>Guest registration</h1>
           <p className="page-intro">
-            Please complete this before you arrive. It takes about a minute — upload a photo of your
-            Aadhaar card and most of it fills itself in.
+            Please complete this before you arrive. It takes about a minute — scan the QR code on
+            your Aadhaar card and most of it fills itself in.
           </p>
         </header>
 
@@ -223,52 +249,77 @@ export default function RegisterForm() {
               Your ID
             </h2>
 
-            <div
-              className={`uploader${dragging ? ' uploader--dragging' : ''}${
-                scanning ? ' uploader--busy' : ''
-              }`}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setDragging(true);
-              }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={handleDrop}
-            >
-              <input
-                type="file"
-                id="document"
-                accept="image/jpeg,image/png,image/webp"
-                onChange={(e) => handleFile(e.target.files?.[0])}
-                disabled={scanning}
-                aria-describedby="upload-hint"
-              />
+            {cameraOpen ? (
+              <QrCamera onDecoded={handleScanned} onCancel={() => setCameraOpen(false)} />
+            ) : (
+              <>
+                {/* First, because it is the path that works. A still photo has
+                 * one attempt at a symbol that needs to fill the frame; the
+                 * camera has one per frame and can say "closer" while the card
+                 * is still in the guest's hand. */}
+                {CAMERA_SUPPORTED && (
+                  <button
+                    type="button"
+                    className="btn btn--block"
+                    onClick={() => setCameraOpen(true)}
+                    disabled={scanning}
+                  >
+                    Scan my Aadhaar QR code
+                  </button>
+                )}
 
-              {previewUrl ? (
-                <div className="uploader__preview">
-                  <img src={previewUrl} alt="" className="uploader__thumb" />
-                  <div>
-                    <p className="uploader__title">{fileName}</p>
-                    <p className="uploader__hint" id="upload-hint">
-                      {scanning ? 'Reading your card…' : 'Tap to choose a different photo'}
-                    </p>
-                  </div>
-                  {scanning && <Spinner label="Reading your card" />}
+                <div
+                  className={`uploader${dragging ? ' uploader--dragging' : ''}${
+                    scanning ? ' uploader--busy' : ''
+                  }`}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragging(true);
+                  }}
+                  onDragLeave={() => setDragging(false)}
+                  onDrop={handleDrop}
+                >
+                  <input
+                    type="file"
+                    id="document"
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={(e) => handleFile(e.target.files?.[0])}
+                    disabled={scanning}
+                    aria-describedby="upload-hint"
+                  />
+
+                  {previewUrl ? (
+                    <div className="uploader__preview">
+                      <img src={previewUrl} alt="" className="uploader__thumb" />
+                      <div>
+                        <p className="uploader__title">{fileName}</p>
+                        <p className="uploader__hint" id="upload-hint">
+                          {scanning ? 'Reading your card…' : 'Tap to choose a different photo'}
+                        </p>
+                      </div>
+                      {scanning && <Spinner label="Reading your card" />}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="uploader__icon" aria-hidden="true">
+                        ⬆
+                      </div>
+                      <p className="uploader__title">
+                        <label htmlFor="document">
+                          {CAMERA_SUPPORTED
+                            ? 'Or upload a photo instead'
+                            : 'Upload a photo of your Aadhaar card'}
+                        </label>
+                      </p>
+                      <p className="uploader__hint" id="upload-hint">
+                        Photograph the QR code on its own, close enough to fill the frame. Using a
+                        different ID? Upload it anyway and fill in the details below.
+                      </p>
+                    </>
+                  )}
                 </div>
-              ) : (
-                <>
-                  <div className="uploader__icon" aria-hidden="true">
-                    ⬆
-                  </div>
-                  <p className="uploader__title">
-                    <label htmlFor="document">Upload a photo of your Aadhaar card</label>
-                  </p>
-                  <p className="uploader__hint" id="upload-hint">
-                    Make sure the QR code is visible and in focus. Using a different ID? Upload it
-                    anyway and fill in the details below.
-                  </p>
-                </>
-              )}
-            </div>
+              </>
+            )}
 
             {scan && <Alert tone={scan.tone}>{scan.message}</Alert>}
           </section>

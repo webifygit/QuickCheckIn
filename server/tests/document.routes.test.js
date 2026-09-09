@@ -18,6 +18,20 @@ async function qrPng(name, payload) {
   return file;
 }
 
+// A valid 1x1 PNG with nothing to decode. Attached wherever a test needs the
+// upload to succeed while the image itself yields no QR.
+function blankPng() {
+  const file = path.join(fixtureDir, 'blank.png');
+  fs.writeFileSync(
+    file,
+    Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+      'base64'
+    )
+  );
+  return file;
+}
+
 beforeAll(async () => {
   fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aadhaar-fixtures-'));
 });
@@ -63,17 +77,7 @@ describe('POST /api/document/scan', () => {
   }, 30000);
 
   it('falls back to manual entry when the image carries no QR code', async () => {
-    const blank = path.join(fixtureDir, 'blank.png');
-    // 1x1 transparent PNG - a valid image with nothing to decode.
-    fs.writeFileSync(
-      blank,
-      Buffer.from(
-        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
-        'base64'
-      )
-    );
-
-    const res = await request(app).post('/api/document/scan').attach('document', blank);
+    const res = await request(app).post('/api/document/scan').attach('document', blankPng());
 
     expect(res.status).toBe(200);
     expect(res.body.fields).toBeNull();
@@ -107,6 +111,83 @@ describe('POST /api/document/scan', () => {
     expect(res.body.fields).toBeNull();
     expect(res.body.message).toMatch(/fill in the details below/i);
   }, 30000);
+
+  // The live-camera path (client/src/components/QrCamera.jsx) reads the QR in
+  // the browser and sends its text with the frame it read it from. Every test
+  // below attaches an image with nothing to decode, which is what proves the
+  // server used the supplied text rather than quietly reading the photo.
+  describe('when the client decoded the QR itself', () => {
+    it('auto-fills from the supplied QR text', async () => {
+      const res = await request(app)
+        .post('/api/document/scan')
+        .field('qrText', buildSecureQr(SAMPLE_FIELDS))
+        .attach('document', blankPng());
+
+      expect(res.status).toBe(200);
+      expect(res.body.fields).toMatchObject({
+        fullName: 'Asha Ramesh Kulkarni',
+        dob: '14/08/1991',
+        gender: 'FEMALE',
+      });
+      // The photo is still stored: staff review the frame the details came from.
+      expect(res.body.documentKey).toMatch(/\.png$/);
+    });
+
+    // The whole reason parsing stays on the server. A browser that could send
+    // fields instead of QR text would be a browser that could skip the masking.
+    it('still masks the Aadhaar number down to four digits', async () => {
+      const uid = '123456789012';
+
+      const res = await request(app)
+        .post('/api/document/scan')
+        .field(
+          'qrText',
+          `<?xml version="1.0"?><PrintLetterBarcodeData uid="${uid}" name="Ramesh Kulkarni" gender="M" yob="1985" state="Maharashtra"/>`
+        )
+        .attach('document', blankPng());
+
+      expect(res.body.fields.idNumber).toBe('XXXX XXXX 9012');
+      expect(JSON.stringify(res.body)).not.toContain(uid);
+    });
+
+    // Two bounds, and they fail differently on purpose. A payload longer than
+    // any real QR is ignored and the guest carries on typing, because a failed
+    // scan is never an error condition. A payload large enough to be an attack
+    // on the parser is refused outright at the boundary.
+    it('ignores a payload longer than any real QR, and still lets the guest continue', async () => {
+      const res = await request(app)
+        .post('/api/document/scan')
+        .field('qrText', '9'.repeat(10_000))
+        .attach('document', blankPng());
+
+      expect(res.status).toBe(200);
+      expect(res.body.fields).toBeNull();
+      expect(res.body.message).toMatch(/fill in the details below/i);
+      expect(res.body.documentKey).toMatch(/\.png$/);
+    }, 30000);
+
+    it('refuses a field too large to accept, without blaming the photo', async () => {
+      const res = await request(app)
+        .post('/api/document/scan')
+        .field('qrText', '9'.repeat(64_000))
+        .attach('document', blankPng());
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/field was too large/i);
+      expect(res.body.error).not.toMatch(/JPEG|PNG|WEBP/i);
+    });
+
+    it('falls back to manual entry when the text is not an Aadhaar QR', async () => {
+      const res = await request(app)
+        .post('/api/document/scan')
+        .field('qrText', 'https://example.com/not-an-aadhaar')
+        .attach('document', blankPng());
+
+      expect(res.status).toBe(200);
+      expect(res.body.fields).toBeNull();
+      expect(res.body.message).toMatch(/fill in the details below/i);
+    });
+  });
 
   it('refuses a non-image upload', async () => {
     const res = await request(app)
