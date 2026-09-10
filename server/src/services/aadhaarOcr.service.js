@@ -269,7 +269,7 @@ function looksLikeName(line) {
   );
 }
 
-function nameFrom(lines) {
+function nameFrom(lines, frontProven) {
   const index = dobLineIndex(lines);
 
   // Walk up from the date of birth; anything further than a few lines is the
@@ -279,8 +279,11 @@ function nameFrom(lines) {
     if (looksLikeName(line)) return line;
   }
 
-  // No usable date to anchor on: fall back to name-shaped words, which is weaker
-  // but beats returning nothing.
+  // Without a date to anchor on, name-shaped words are only trusted once a gender
+  // line has proven this is the front. On the back, place names are name-shaped
+  // too: a real guest's address landed in the name field this way.
+  if (index < 0 && !frontProven) return '';
+
   const beforeDate = (index < 0 ? lines : lines.slice(0, index)).join(' ');
   const titled = (beforeDate.match(/\b[A-Z][a-z]{2,}\b/g) || []).filter((w) => !NOT_A_NAME.test(w));
   return titled.length >= 2 ? titled.slice(-4).join(' ') : '';
@@ -289,23 +292,30 @@ function nameFrom(lines) {
 // Every card prints the address twice, once in the local script, and tesseract
 // renders that pass as convincing nonsense - so the address starts at the English
 // block's care-of line, matched loosely in case the crop clips its first letter.
-const CARE_OF = /(?:^|\s)[CSWDcswd]?\s*\/\s*[Oo]\b/;
+// Not every address has a care-of line, so an "Address" label anywhere on a line
+// anchors it too - with junk before it, or on a line too short to survive the
+// content filter below, which is why the anchor is found before filtering.
+const ADDRESS_ANCHOR = /\baddress\b|(?:^|\s)[CSWDcswd]?\s*\/\s*[Oo]\b/i;
 const PINCODE = /\b[1-9]\d{5}\b/;
 
 function addressFrom(text) {
-  const lines = text
+  const raw = text
     .split('\n')
     .map((l) => l.trim())
-    .filter((l) => l.length > 8 && (l.match(/[A-Za-z]/g) || []).length / l.length > 0.55);
+    .filter(Boolean);
 
-  const start = lines.findIndex((l) => CARE_OF.test(l) || /^address/i.test(l));
+  const start = raw.findIndex((l) => ADDRESS_ANCHOR.test(l));
   if (start < 0) return '';
 
+  const lines = raw
+    .slice(start)
+    .map((l, i) => (i === 0 ? l.replace(/^.*?\baddress\b\s*:?\s*/i, '') : l))
+    .filter((l) => l.length > 8 && (l.match(/[A-Za-z]/g) || []).length / l.length > 0.55);
+
   const joined = lines
-    .slice(start, start + 7)
+    .slice(0, 7)
     .join(', ')
     .replace(/\s*,\s*/g, ', ')
-    .replace(/^address:?\s*/i, '')
     .split(',')
     .map((part) =>
       part
@@ -343,7 +353,7 @@ function frontFieldsFrom(found) {
   const lines = linesOf(identity);
   const gender = GENDERS.find(([re]) => re.test(identity));
   return {
-    fullName: nameFrom(lines),
+    fullName: nameFrom(lines, Boolean(gender)),
     dob: dobFrom(lines),
     gender: gender ? gender[1] : '',
     idNumber: maskedNumberFrom(`${found.number?.text || ''} ${identity}`),
@@ -359,8 +369,8 @@ function backFieldsFrom(found) {
   // or the region's edge can lose. Put it back - but only one printed after the
   // care-of line, so a digit run in the local-script copy above cannot stand in.
   if (address && !PINCODE.test(address)) {
-    const careOf = text.search(CARE_OF);
-    const pincode = (careOf >= 0 ? text.slice(careOf) : '').match(PINCODE);
+    const anchor = text.search(ADDRESS_ANCHOR);
+    const pincode = (anchor >= 0 ? text.slice(anchor) : '').match(PINCODE);
     if (pincode) address = `${address}, ${pincode[0]}`;
   }
 
@@ -377,10 +387,11 @@ const EXTRACTORS = {
 const OTHER_SIDE = { front: 'back', back: 'front' };
 
 // How many fields that only the given side carries were found. The number is on
-// both sides, so it proves nothing about which one a photo is.
+// both sides, so it proves nothing about which one a photo is - and neither does
+// a name, since place names on the back read as names.
 function evidenceFor(side, fields) {
   if (!fields) return 0;
-  return side === 'front' ? ['fullName', 'dob', 'gender'].filter((k) => fields[k]).length : fields.address ? 1 : 0;
+  return side === 'front' ? ['dob', 'gender'].filter((k) => fields[k]).length : fields.address ? 1 : 0;
 }
 
 // Which side a photo was, from what each extractor found on it. The slot the

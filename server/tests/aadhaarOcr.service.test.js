@@ -71,6 +71,16 @@ describe('the front extractor', () => {
     expect(front('Asha Kulkarni\n14/08/1991\nFEMALE').gender).toBe('FEMALE');
   });
 
+  // A real guest's back photo put their address in the name field: with no date
+  // of birth to anchor on, capitalised place names were taken for a name.
+  it('does not take place names on the back of a card for a name', () => {
+    expect(front('Aamena Residency Nr Shahwazuuddin\nDargah Khanpur Ahmedabad City').fullName).toBe('');
+  });
+
+  it('still falls back to name-shaped words when a gender line proves it is the front', () => {
+    expect(front('Irshad Memon\nMALE').fullName).toBe('Irshad Memon');
+  });
+
   it('returns no address - that is the back extractor\'s job', () => {
     expect(front('Irshad Memon\n18/02/1985\nMALE')).not.toHaveProperty('address');
   });
@@ -102,6 +112,23 @@ describe('the back extractor', () => {
     const { address } = back('ગુજરાત 380001\nC/O: Mohammed Farid, 601 6th Floor\nAamena Residency, Nr Shahwazuuddin\nDargah, Khanpur, Ahmedabad City');
 
     expect(address).not.toContain('380001');
+  });
+
+  // Not every address has a care-of line. The label alone has to anchor it, even
+  // on a line too short to survive the content filter.
+  it('reads an address that has an Address label but no care-of line', () => {
+    const { address } = back('Address:\nFlat 12, Shanti Nagar Society\nNear Bus Stand, Navrangpura\nAhmedabad, Gujarat - 380009');
+
+    expect(address).toContain('Shanti Nagar Society');
+    expect(address).toContain('380009');
+    expect(address).not.toMatch(/address/i);
+  });
+
+  it('finds the Address label behind junk tesseract left in front of it', () => {
+    const { address } = back('| Address: 12 Rose Villa Apartments\nMG Road, Navrangpura\nAhmedabad, Gujarat 380009');
+
+    expect(address).toMatch(/^12 Rose Villa Apartments/);
+    expect(address).toContain('380009');
   });
 
   it('returns no address for the front of a card', () => {
@@ -141,6 +168,12 @@ describe('telling which side a photo was', () => {
   // The number is printed on both sides, so it cannot move a photo anywhere.
   it('keeps the slot when only the number was read', () => {
     expect(chooseSide('front', numberOnly, { address: '', idNumber: 'XXXX XXXX 7966' })).toBe('front');
+  });
+
+  // A name is not proof of the front: on the back, place names read as names.
+  it('does not treat a name alone as proof a photo is the front', () => {
+    const nameOnly = { fullName: 'Dargah Khanpur', dob: '', gender: '', idNumber: '' };
+    expect(chooseSide('back', nameOnly, { address: '', idNumber: '' })).toBe('back');
   });
 
   it('decides from the evidence when there is no slot, as with a camera photo', () => {
