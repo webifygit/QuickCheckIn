@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { flushSync } from 'react-dom';
+import { combineScan } from '../lib/combineFields';
 import api, { describeError } from '../api/client';
 import Field from '../components/Field';
 import Alert from '../components/Alert';
@@ -34,6 +34,12 @@ const EMPTY_FORM = {
 
 const AUTOFILLED_FIELDS = ['fullName', 'dob', 'gender', 'idNumber', 'address'];
 
+function conflictNote(conflicts) {
+  return conflicts.includes('idNumber')
+    ? " The ID number on this doesn't match the one already filled in, so please check both are from the same card."
+    : '';
+}
+
 const EMPTY_SIDES = {
   front: { key: null, previewUrl: null, fileName: '' },
   back: { key: null, previewUrl: null, fileName: '' },
@@ -49,11 +55,10 @@ export default function RegisterForm() {
   // only the slot being read shows a spinner.
   const [scanningSide, setScanningSide] = useState(null);
   const [scan, setScan] = useState(null); // { tone, message }
-  const [autofilled, setAutofilled] = useState([]);
+  // Where each auto-filled value came from, 'qr' or 'ocr'. A filled field with no
+  // entry here was typed by the guest, and no later scan may overwrite it.
+  const [sources, setSources] = useState({});
   const [cameraOpen, setCameraOpen] = useState(false);
-  // Whether the filled values came from printed text rather than the QR, which
-  // changes how hard the form asks the guest to check them.
-  const [ocrSourced, setOcrSourced] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState('');
@@ -67,15 +72,17 @@ export default function RegisterForm() {
   // Read only by the unmount cleanup, which must see the latest previews rather
   // than the ones captured when the effect was created.
   const sidesRef = useRef(sides);
-  const autofilledRef = useRef(autofilled);
+  const valuesRef = useRef(form);
+  const sourcesRef = useRef(sources);
 
   // Kept in step after each render rather than during it. Everything that reads
   // these does so from an event handler or a cleanup, both of which run after
   // the effect has caught up.
   useEffect(() => {
     sidesRef.current = sides;
-    autofilledRef.current = autofilled;
-  }, [sides, autofilled]);
+    valuesRef.current = form;
+    sourcesRef.current = sources;
+  }, [sides, form, sources]);
 
   // Release every preview the page still holds when it unmounts. Replacements
   // are revoked as they happen, in setSide.
@@ -110,8 +117,13 @@ export default function RegisterForm() {
       delete next[key];
       return next;
     });
-    // A field the guest has corrected is no longer "filled in for you".
-    setAutofilled((fields) => fields.filter((name) => name !== key));
+    // A field the guest has corrected is theirs now, and no later scan overwrites it.
+    setSources((current) => {
+      if (!current[key]) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
   }
 
   // Replaces one slot, revoking whatever preview it held. Every write to `sides`
@@ -126,22 +138,23 @@ export default function RegisterForm() {
     });
   }
 
-  function fillFields(fields) {
-    const filled = [];
-    setForm((f) => {
-      const next = { ...f };
-      for (const key of AUTOFILLED_FIELDS) {
-        if (fields[key]) {
-          next[key] = fields[key];
-          filled.push(key);
-        }
-      }
+  function moveSide(from, to) {
+    setSides((current) => ({ ...current, [to]: current[from], [from]: EMPTY_SIDES[from] }));
+  }
+
+  // Folds one scan's fields into the form through the combiner. Only the keys it
+  // decided to change are written, so a keystroke made while a scan was in flight
+  // is not replaced by a stale copy of the form.
+  function applyScan(fields, source) {
+    const picked = Object.fromEntries(AUTOFILLED_FIELDS.map((key) => [key, fields?.[key]]));
+    const result = combineScan({ form: valuesRef.current, sources: sourcesRef.current }, picked, source);
+    setForm((f) => ({ ...f, ...result.changes }));
+    setSources((current) => {
+      const next = { ...current, ...result.sourceChanges };
+      for (const key of result.cleared) delete next[key];
       return next;
     });
-    // Merged, not replaced. The two sides carry different fields - name and
-    // date of birth on the front, address on the back - so a second upload
-    // must not un-mark what the first one filled.
-    setAutofilled((current) => [...new Set([...current, ...filled])]);
+    return result;
   }
 
   // One path for every way in. The camera arrives having already read the QR and
@@ -152,7 +165,7 @@ export default function RegisterForm() {
   async function submitScan(file, qrText, side) {
     // Read through the ref: handleScanned is created once, so its closure holds
     // the first render's value of this and would always see it as empty.
-    const alreadyFilled = autofilledRef.current.length > 0;
+    const alreadyFilled = Object.keys(sourcesRef.current).length > 0;
 
     setSide(side, { previewUrl: URL.createObjectURL(file), fileName: file.name });
     setScanningSide(side);
@@ -172,22 +185,35 @@ export default function RegisterForm() {
       // masking the Aadhaar number out of it, stays on the server where the
       // guest's browser cannot decide to skip either step.
       if (qrText) body.append('qrText', qrText);
+      body.append('side', side);
       const { data } = await api.post('/api/document/scan', body);
 
-      setSide(side, { key: data.documentKey || null });
+      // The server can tell which side a photo really is. A back photo in the
+      // front slot is moved across, if that slot is free, so the hotel's record
+      // is labelled correctly and the guest is asked for the side still missing.
+      const detected = data.side;
+      const moved = Boolean(detected && detected !== side && !sidesRef.current[detected]?.key);
+      if (moved) moveSide(side, detected);
+      setSide(moved ? detected : side, { key: data.documentKey || null });
+      const sideNote = !moved
+        ? ''
+        : detected === 'back'
+          ? " That photo is the back of your card, so we've moved it to the back slot. Please add the front."
+          : " That photo is the front of your card, so we've moved it to the front slot.";
 
       if (data.fields) {
-        fillFields(data.fields);
-        setOcrSourced(data.source === 'ocr');
+        const { conflicts } = applyScan(data.fields, data.source === 'ocr' ? 'ocr' : 'qr');
         setScan({
           // Fields read off printed text are a guess where the QR is a fact, so
           // they are not announced with a tick. The guest is the only one who
           // can tell whether they are right, and the wording has to earn that
           // second look rather than assume it.
-          tone: data.source === 'ocr' ? 'warning' : 'success',
+          tone: data.source === 'ocr' || conflicts.length ? 'warning' : 'success',
           message:
-            data.message ||
-            'We read your Aadhaar QR code and filled in the details below. Please check them and correct anything that looks wrong.',
+            (data.message ||
+              'We read your Aadhaar QR code and filled in the details below. Please check them and correct anything that looks wrong.') +
+            sideNote +
+            conflictNote(conflicts),
         });
       } else if (!alreadyFilled) {
         // Only worth saying when nothing has filled the form yet. Once the
@@ -196,8 +222,10 @@ export default function RegisterForm() {
         // reads as a problem they need to go and fix.
         setScan({
           tone: 'warning',
-          message: data.message || "We couldn't read this image. Please fill the form in yourself.",
+          message: (data.message || "We couldn't read this image. Please fill the form in yourself.") + sideNote,
         });
+      } else if (moved) {
+        setScan({ tone: 'warning', message: sideNote.trim() });
       }
     } catch (err) {
       // Whatever went wrong - unreachable server, timeout, a 500 - the guest's
@@ -231,12 +259,14 @@ export default function RegisterForm() {
     submitScan(file, qrText, sidesRef.current.front.key ? 'back' : 'front');
   }, []);
 
-  // The uploads only exist in the DOM once the camera has closed, so the close
-  // is flushed before scrolling to them.
-  function handleUsePhotos() {
-    flushSync(() => setCameraOpen(false));
-    document.getElementById('document-front')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }
+  // A photo taken with the camera goes through the same upload and the same
+  // server extractors as one picked from the gallery - there is one pipeline.
+  // It fills the front slot first; the server moves it if it was the back.
+  const handleCaptured = useCallback((blob) => {
+    setCameraOpen(false);
+    const file = new File([blob], 'card-photo.jpg', { type: 'image/jpeg' });
+    submitScan(file, null, sidesRef.current.front.key ? 'back' : 'front');
+  }, []);
 
   // QR text read from an e-Aadhaar PDF on the guest's phone. Only the text is
   // sent: the PDF holds the full signed record and is never uploaded, and the
@@ -250,12 +280,12 @@ export default function RegisterForm() {
       body.append('qrText', qrText);
       const { data } = await api.post('/api/document/scan', body);
       if (data.fields) {
-        fillFields(data.fields);
-        setOcrSourced(false);
+        const { conflicts } = applyScan(data.fields, 'qr');
         setScan({
-          tone: 'success',
+          tone: conflicts.length ? 'warning' : 'success',
           message:
-            'We read the QR code in your e-Aadhaar PDF and filled in the details below. Please check them. You still need photos of your card below.',
+            'We read the QR code in your e-Aadhaar PDF and filled in the details below. Please check them. You still need photos of your card below.' +
+            conflictNote(conflicts),
         });
       } else {
         setScan({ tone: 'warning', message: data.message });
@@ -339,11 +369,11 @@ export default function RegisterForm() {
   }
 
   const hint = (key) =>
-    autofilled.includes(key)
-      ? ocrSourced
-        ? 'Read from the printed card — please check'
-        : 'Filled in from your Aadhaar card'
-      : undefined;
+    sources[key] === 'ocr'
+      ? 'Read from the printed card — please check'
+      : sources[key] === 'qr'
+        ? 'Filled in from your Aadhaar card'
+        : undefined;
 
   return (
     <main id="main" className="page page--form">
@@ -367,7 +397,7 @@ export default function RegisterForm() {
               <QrCamera
                 onDecoded={handleScanned}
                 onCancel={() => setCameraOpen(false)}
-                onUsePhotos={handleUsePhotos}
+                onCapture={handleCaptured}
               />
             ) : (
               <>

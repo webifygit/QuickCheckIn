@@ -38,7 +38,7 @@ const BOX_FRACTION = 0.72;
 // an error rather than as guidance.
 const FRAMES_BEFORE_HINT = 12;
 
-// Past this with no read, offer photo uploads. A code merged by the printer
+// Past this with no read, offer a photo instead. A code merged by the printer
 // never reads by camera, and without a way out the guest aims forever.
 const GIVE_UP_MS = 15_000;
 
@@ -143,13 +143,16 @@ function readControls(track) {
   };
 }
 
-export default function QrCamera({ onDecoded, onCancel, onUsePhotos }) {
+export default function QrCamera({ onDecoded, onCancel, onCapture }) {
   const videoRef = useRef(null);
   const trackRef = useRef(null);
   const [state, setState] = useState('starting');
   const [error, setError] = useState('');
   const [hint, setHint] = useState(false);
   const [stuck, setStuck] = useState(false);
+  // Framing the whole card for a photo rather than aiming the code into the box.
+  const [captureMode, setCaptureMode] = useState(false);
+  const [capturing, setCapturing] = useState(false);
   // Null until the stream is open and has said what it supports.
   const [controls, setControls] = useState({ zoom: null, torch: false });
   const [zoom, setZoom] = useState(1);
@@ -313,6 +316,14 @@ export default function QrCamera({ onDecoded, onCancel, onUsePhotos }) {
     }
   }
 
+  async function capture() {
+    if (!videoRef.current || capturing) return;
+    setCapturing(true);
+    const blob = await captureFrame(videoRef.current);
+    if (blob) onCapture?.(blob);
+    else setCapturing(false);
+  }
+
   async function toggleTorch() {
     const next = !torchOn;
     setTorchOn(next);
@@ -342,15 +353,17 @@ export default function QrCamera({ onDecoded, onCancel, onUsePhotos }) {
         * neatly fills the box on screen is not filling the region being read. */}
       <div className="qr-camera" style={aspect ? { aspectRatio: String(aspect) } : undefined}>
         <video ref={videoRef} className="qr-camera__video" playsInline muted />
-        <div
-          className="qr-camera__box"
-          aria-hidden="true"
-          style={
-            aspect && aspect > 1
-              ? { height: `${BOX_FRACTION * 100}%` }
-              : { width: `${BOX_FRACTION * 100}%` }
-          }
-        />
+        {!captureMode && (
+          <div
+            className="qr-camera__box"
+            aria-hidden="true"
+            style={
+              aspect && aspect > 1
+                ? { height: `${BOX_FRACTION * 100}%` }
+                : { width: `${BOX_FRACTION * 100}%` }
+            }
+          />
+        )}
         {state === 'starting' && (
           <div className="qr-camera__status">
             <Spinner label="Starting the camera" />
@@ -390,27 +403,48 @@ export default function QrCamera({ onDecoded, onCancel, onUsePhotos }) {
       <p className="qr-camera__hint" role="status">
         {state === 'starting'
           ? 'Starting the camera…'
-          : hint
+          : captureMode
+            ? 'Fit the whole card in the frame, hold steady, then tap Capture photo.'
+            : hint
             ? controls.zoom
               ? 'Nothing yet — fill the square with the code, using zoom rather than moving closer. Too close and the camera cannot focus.'
               : 'Nothing yet — fill the square with the code, and hold steady while it focuses.'
             : 'Hold the QR code on your Aadhaar card inside the square.'}
       </p>
 
-      {stuck && (
-        <>
-          <Alert tone="warning">
-            Still can't read the code. Some cards, especially small ones printed at home or at a
-            shop, have a QR code no camera can read. Upload photos of the front and back instead and
-            we'll read the printed details.
-          </Alert>
-          {onUsePhotos && (
-            <button type="button" className="btn btn--block" onClick={onUsePhotos}>
-              Use photos instead
-            </button>
-          )}
-        </>
+      {stuck && !captureMode && (
+        <Alert tone="warning">
+          Still can't read the code. Some cards, especially small ones printed at home or at a shop,
+          have a QR code no camera can read. Take a photo of the whole card instead and we'll read
+          the printed details.
+        </Alert>
       )}
+
+      {onCapture &&
+        (captureMode ? (
+          <>
+            <button
+              type="button"
+              className="btn btn--block"
+              onClick={capture}
+              disabled={state !== 'scanning' || capturing}
+            >
+              {capturing ? 'Capturing…' : 'Capture photo'}
+            </button>
+            <button type="button" className="btn btn--ghost" onClick={() => setCaptureMode(false)}>
+              Scan the QR code instead
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            className={`btn btn--block${stuck ? '' : ' btn--secondary'}`}
+            onClick={() => setCaptureMode(true)}
+            disabled={state !== 'scanning'}
+          >
+            Take a photo instead
+          </button>
+        ))}
 
       <button type="button" className="btn btn--ghost" onClick={onCancel}>
         Cancel

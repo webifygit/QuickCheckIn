@@ -71,12 +71,12 @@ function clientQrText(req) {
 //
 // Required lazily. tesseract pulls in a worker and a 5MB model, and a guest
 // whose QR read on the first pass should not pay to load either.
-async function readPrintedFields(buffer, documentKey) {
+async function readPrintedFields(buffer, documentKey, sideHint) {
   try {
-    const { readAadhaarFields } = require('../services/aadhaarOcr.service');
-    const result = await readAadhaarFields(buffer);
+    const { readAadhaarCard } = require('../services/aadhaarOcr.service');
+    const result = await readAadhaarCard(buffer, sideHint);
     if (!result) {
-      logger.info({ documentKey }, 'OCR found nothing usable');
+      logger.info({ documentKey, sideHint }, 'OCR found nothing usable');
       return null;
     }
     // The values themselves are the guest's name and address and are not logged.
@@ -84,7 +84,7 @@ async function readPrintedFields(buffer, documentKey) {
     // region was - that is how the geometry gets checked against cards other
     // than the one it was derived from.
     logger.info({ documentKey, ...result.diagnostics }, 'Fields read from printed text');
-    return result.fields;
+    return result;
   } catch (err) {
     // OCR must never be why a guest's upload fails: they can still type.
     logger.warn({ err: err.message, documentKey }, 'OCR fallback threw');
@@ -111,8 +111,13 @@ const NOT_AADHAAR_TEXT_MESSAGE =
 
 // A failed scan is never an error condition. The guest can always type their
 // details in, so every path below returns 200 with whatever we managed to read.
+const SIDES = new Set(['front', 'back']);
+
 async function scan(req, res) {
   const suppliedQr = clientQrText(req);
+  // The upload slot the photo came from. Only a hint: the extractors can tell a
+  // back photo that landed in the front slot, and say so in the response.
+  const sideHint = SIDES.has(req.body?.side) ? req.body.side : null;
 
   // QR text with no image: read from an e-Aadhaar PDF opened on the guest's own
   // phone. The PDF holds the full signed record and never leaves the device, so
@@ -162,9 +167,15 @@ async function scan(req, res) {
     // report of "the scan didn't work" is unanswerable.
     logger.info({ documentKey, ...(diagnostics || {}) }, 'No QR found in uploaded image');
 
-    const printed = await readPrintedFields(req.file.buffer, documentKey);
+    const printed = await readPrintedFields(req.file.buffer, documentKey, sideHint);
     if (printed) {
-      return res.json({ documentKey, fields: printed, source: 'ocr', message: OCR_MESSAGE });
+      return res.json({
+        documentKey,
+        fields: printed.fields,
+        side: printed.side,
+        source: 'ocr',
+        message: OCR_MESSAGE,
+      });
     }
 
     return res.json({ documentKey, fields: null, message: NO_QR_MESSAGE });
