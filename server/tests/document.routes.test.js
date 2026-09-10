@@ -180,6 +180,50 @@ describe('POST /api/document/scan', () => {
       expect(res.body.error).not.toMatch(/JPEG|PNG|WEBP/i);
     });
 
+    // The e-Aadhaar PDF path: the QR was read on the guest's phone from a PDF
+    // that never leaves it, so only the text arrives.
+    it('accepts QR text with no image, and stores nothing', async () => {
+      const before = fs.readdirSync(process.env.UPLOAD_DIR);
+
+      const res = await request(app)
+        .post('/api/document/scan')
+        .field('qrText', buildSecureQr(SAMPLE_FIELDS));
+
+      expect(res.status).toBe(200);
+      expect(res.body.fields).toMatchObject({ fullName: 'Asha Ramesh Kulkarni', dob: '14/08/1991' });
+      expect(res.body.documentKey).toBeNull();
+      expect(fs.readdirSync(process.env.UPLOAD_DIR).length).toBe(before.length);
+    });
+
+    it('masks the Aadhaar number on the image-less path too', async () => {
+      const uid = '123456789012';
+
+      const res = await request(app)
+        .post('/api/document/scan')
+        .field(
+          'qrText',
+          `<?xml version="1.0"?><PrintLetterBarcodeData uid="${uid}" name="Ramesh Kulkarni" gender="M" yob="1985"/>`
+        );
+
+      expect(res.body.fields.idNumber).toBe('XXXX XXXX 9012');
+      expect(JSON.stringify(res.body)).not.toContain(uid);
+    });
+
+    it('does not claim a photo was saved when only text arrived', async () => {
+      const res = await request(app)
+        .post('/api/document/scan')
+        .field('qrText', 'https://example.com/not-an-aadhaar');
+
+      expect(res.body.fields).toBeNull();
+      expect(res.body.message).not.toMatch(/photo has been saved/i);
+    });
+
+    it('still refuses a request carrying neither an image nor QR text', async () => {
+      const res = await request(app).post('/api/document/scan').field('qrText', '   ');
+
+      expect(res.status).toBe(400);
+    });
+
     it('falls back to manual entry when the text is not an Aadhaar QR', async () => {
       const res = await request(app)
         .post('/api/document/scan')

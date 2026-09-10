@@ -6,6 +6,7 @@ import Alert from '../components/Alert';
 import Spinner from '../components/Spinner';
 import QrCamera from '../components/QrCamera';
 import IdUploader from '../components/IdUploader';
+import EAadhaarPdf from '../components/EAadhaarPdf';
 
 // Older browsers, and any context that is not secure, have no camera to offer.
 // Checked once at module load so the button is simply absent rather than
@@ -125,6 +126,24 @@ export default function RegisterForm() {
     });
   }
 
+  function fillFields(fields) {
+    const filled = [];
+    setForm((f) => {
+      const next = { ...f };
+      for (const key of AUTOFILLED_FIELDS) {
+        if (fields[key]) {
+          next[key] = fields[key];
+          filled.push(key);
+        }
+      }
+      return next;
+    });
+    // Merged, not replaced. The two sides carry different fields - name and
+    // date of birth on the front, address on the back - so a second upload
+    // must not un-mark what the first one filled.
+    setAutofilled((current) => [...new Set([...current, ...filled])]);
+  }
+
   // One path for every way in. The camera arrives having already read the QR and
   // passes its text along; an uploaded file passes null and the server does the
   // reading. Either side of the card can auto-fill - many Aadhaar cards carry a
@@ -158,21 +177,7 @@ export default function RegisterForm() {
       setSide(side, { key: data.documentKey || null });
 
       if (data.fields) {
-        const filled = [];
-        setForm((f) => {
-          const next = { ...f };
-          for (const key of AUTOFILLED_FIELDS) {
-            if (data.fields[key]) {
-              next[key] = data.fields[key];
-              filled.push(key);
-            }
-          }
-          return next;
-        });
-        // Merged, not replaced. The two sides carry different fields - name and
-        // date of birth on the front, address on the back - so a second upload
-        // must not un-mark what the first one filled.
-        setAutofilled((current) => [...new Set([...current, ...filled])]);
+        fillFields(data.fields);
         setOcrSourced(data.source === 'ocr');
         setScan({
           // Fields read off printed text are a guess where the QR is a fact, so
@@ -231,6 +236,36 @@ export default function RegisterForm() {
   function handleUsePhotos() {
     flushSync(() => setCameraOpen(false));
     document.getElementById('document-front')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  // QR text read from an e-Aadhaar PDF on the guest's phone. Only the text is
+  // sent: the PDF holds the full signed record and is never uploaded, and the
+  // server still does the parsing and masking.
+  async function submitPdfQr(qrText) {
+    setScanningSide('pdf');
+    setScan(null);
+    setError('');
+    try {
+      const body = new FormData();
+      body.append('qrText', qrText);
+      const { data } = await api.post('/api/document/scan', body);
+      if (data.fields) {
+        fillFields(data.fields);
+        setOcrSourced(false);
+        setScan({
+          tone: 'success',
+          message:
+            'We read the QR code in your e-Aadhaar PDF and filled in the details below. Please check them. You still need photos of your card below.',
+        });
+      } else {
+        setScan({ tone: 'warning', message: data.message });
+      }
+    } catch (err) {
+      const { message } = describeError(err, "We couldn't read that PDF's code.");
+      setScan({ tone: 'warning', message: `${message} You can fill the form in yourself.` });
+    } finally {
+      setScanningSide(null);
+    }
   }
 
   // The form sets noValidate so errors render in the page's own style rather
@@ -360,6 +395,8 @@ export default function RegisterForm() {
                     </p>
                   </>
                 )}
+
+                <EAadhaarPdf onDecoded={submitPdfQr} disabled={Boolean(scanningSide)} />
 
                 <IdUploader
                   id="document-front"

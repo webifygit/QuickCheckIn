@@ -595,6 +595,31 @@
   flex-shrink: 0;
 }
 
+/* --------------------------------------------------------- pdf reader -- */
+
+.pdf-reader {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunken);
+  padding: var(--space-3) var(--space-4);
+}
+
+.pdf-reader > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.pdf-reader[open] > summary {
+  margin-bottom: var(--space-3);
+}
+
+.pdf-reader__lead {
+  max-width: none;
+  margin: 0;
+  text-align: left;
+}
+
 /* ---------------------------------------------------------- qr camera -- */
 
 /* The aspect ratio is set inline from the stream's own dimensions, so the

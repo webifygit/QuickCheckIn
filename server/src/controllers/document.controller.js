@@ -92,11 +92,41 @@ async function readPrintedFields(buffer, documentKey) {
   }
 }
 
+// The only place QR text becomes form fields, whichever device read it. Keeping
+// it here is what makes the masking inside parseAadhaarQr unconditional.
+function fieldsFromQr(qrString, documentKey, notAadhaarMessage) {
+  let fields = null;
+  try {
+    fields = parseAadhaarQr(qrString);
+  } catch (err) {
+    logger.warn({ err: err.message, documentKey }, 'Aadhaar QR parse failed');
+  }
+  if (!fields || !fields.fullName) return { fields: null, message: notAadhaarMessage };
+  return { fields };
+}
+
+// Said when QR text arrived without an image, so nothing was saved.
+const NOT_AADHAAR_TEXT_MESSAGE =
+  "That doesn't look like an Aadhaar QR code, so there was nothing to fill in. Please fill in the details below.";
+
 // A failed scan is never an error condition. The guest can always type their
 // details in, so every path below returns 200 with whatever we managed to read.
 async function scan(req, res) {
+  const suppliedQr = clientQrText(req);
+
+  // QR text with no image: read from an e-Aadhaar PDF opened on the guest's own
+  // phone. The PDF holds the full signed record and never leaves the device, so
+  // only the text arrives - parsed and masked here like any other read, and
+  // nothing is stored.
   if (!req.file) {
-    return res.status(400).json({ error: 'No image uploaded' });
+    if (!suppliedQr) {
+      return res.status(400).json({ error: 'No image uploaded' });
+    }
+    logger.info({ decoder: 'client', stored: false }, 'QR text received without an image');
+    return res.json({
+      documentKey: null,
+      ...fieldsFromQr(suppliedQr, null, NOT_AADHAAR_TEXT_MESSAGE),
+    });
   }
 
   // The browser's Content-Type is unverified. Trust the bytes instead, so a
@@ -108,7 +138,7 @@ async function scan(req, res) {
 
   const documentKey = await storage.save(req.file.buffer, detectedMime);
 
-  let qrString = clientQrText(req);
+  let qrString = suppliedQr;
   let diagnostics = qrString ? { decoder: 'client' } : null;
 
   // Only decode here if the client did not. A frame that already yielded a QR
@@ -142,18 +172,7 @@ async function scan(req, res) {
 
   logger.info({ documentKey, ...(diagnostics || {}) }, 'QR decoded from uploaded image');
 
-  let fields = null;
-  try {
-    fields = parseAadhaarQr(qrString);
-  } catch (err) {
-    logger.warn({ err: err.message, documentKey }, 'Aadhaar QR parse failed');
-  }
-
-  if (!fields || !fields.fullName) {
-    return res.json({ documentKey, fields: null, message: NOT_AADHAAR_MESSAGE });
-  }
-
-  return res.json({ documentKey, fields });
+  return res.json({ documentKey, ...fieldsFromQr(qrString, documentKey, NOT_AADHAAR_MESSAGE) });
 }
 
 module.exports = { scan };
