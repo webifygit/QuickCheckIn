@@ -38,6 +38,10 @@ const BOX_FRACTION = 0.72;
 // an error rather than as guidance.
 const FRAMES_BEFORE_HINT = 12;
 
+// Past this with no read, offer photo uploads. A code merged by the printer
+// never reads by camera, and without a way out the guest aims forever.
+const GIVE_UP_MS = 15_000;
+
 // Breathing room between attempts. The decode itself is the real throttle -
 // each pass waits for the last - so this only keeps a fast phone from spending
 // every cycle on frames the camera has not changed yet.
@@ -139,12 +143,13 @@ function readControls(track) {
   };
 }
 
-export default function QrCamera({ onDecoded, onCancel }) {
+export default function QrCamera({ onDecoded, onCancel, onUsePhotos }) {
   const videoRef = useRef(null);
   const trackRef = useRef(null);
   const [state, setState] = useState('starting');
   const [error, setError] = useState('');
   const [hint, setHint] = useState(false);
+  const [stuck, setStuck] = useState(false);
   // Null until the stream is open and has said what it supports.
   const [controls, setControls] = useState({ zoom: null, torch: false });
   const [zoom, setZoom] = useState(1);
@@ -235,6 +240,8 @@ export default function QrCamera({ onDecoded, onCancel }) {
       const canvas = document.createElement('canvas');
       const context = canvas.getContext('2d', { willReadFrequently: true });
       let failures = 0;
+      const scanningSince = Date.now();
+      let stuckShown = false;
 
       while (!cancelled) {
         const width = video.videoWidth;
@@ -278,6 +285,10 @@ export default function QrCamera({ onDecoded, onCancel }) {
 
           failures += 1;
           if (failures === FRAMES_BEFORE_HINT) setHint(true);
+          if (!stuckShown && Date.now() - scanningSince > GIVE_UP_MS) {
+            stuckShown = true;
+            setStuck(true);
+          }
         }
 
         await new Promise((resolve) => setTimeout(resolve, FRAME_DELAY_MS));
@@ -385,6 +396,21 @@ export default function QrCamera({ onDecoded, onCancel }) {
               : 'Nothing yet — fill the square with the code, and hold steady while it focuses.'
             : 'Hold the QR code on your Aadhaar card inside the square.'}
       </p>
+
+      {stuck && (
+        <>
+          <Alert tone="warning">
+            Still can't read the code. Some cards, especially small ones printed at home or at a
+            shop, have a QR code no camera can read. Upload photos of the front and back instead and
+            we'll read the printed details.
+          </Alert>
+          {onUsePhotos && (
+            <button type="button" className="btn btn--block" onClick={onUsePhotos}>
+              Use photos instead
+            </button>
+          )}
+        </>
+      )}
 
       <button type="button" className="btn btn--ghost" onClick={onCancel}>
         Cancel

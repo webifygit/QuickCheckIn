@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import api, { describeError } from '../api/client';
 import Field from '../components/Field';
 import Alert from '../components/Alert';
@@ -225,6 +226,13 @@ export default function RegisterForm() {
     submitScan(file, qrText, sidesRef.current.front.key ? 'back' : 'front');
   }, []);
 
+  // The uploads only exist in the DOM once the camera has closed, so the close
+  // is flushed before scrolling to them.
+  function handleUsePhotos() {
+    flushSync(() => setCameraOpen(false));
+    document.getElementById('document-front')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
   // The form sets noValidate so errors render in the page's own style rather
   // than as browser bubbles - which means the required fields are checked here.
   // The server re-checks all of it; this only saves the guest a round trip.
@@ -321,7 +329,11 @@ export default function RegisterForm() {
             </h2>
 
             {cameraOpen ? (
-              <QrCamera onDecoded={handleScanned} onCancel={() => setCameraOpen(false)} />
+              <QrCamera
+                onDecoded={handleScanned}
+                onCancel={() => setCameraOpen(false)}
+                onUsePhotos={handleUsePhotos}
+              />
             ) : (
               <>
                 {/* First, because it is the path that works. A still photo has
